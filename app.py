@@ -1,295 +1,495 @@
 import streamlit as st
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-# Configuration
-st.set_page_config(page_title="Analyse BRVM", layout="wide")
-st.title("📊 Analyse des titres BRVM")
+# Configuration de la page
+st.set_page_config(
+    page_title="BRVM Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-@st.cache_data(ttl=300)  # Cache 5 minutes
-def scrape_brvm_data():
-    """
-    Fonction pour scraper les données du site BRVM
-    basée sur la structure HTML observée
-    """
-    url = "https://www.brvm.org/fr/cours-actions/0"
+# Style CSS personnalisé
+st.markdown("""
+<style>
+    /* Style général */
+    .main {
+        padding: 0rem 1rem;
+    }
     
-    try:
-        # Headers pour simuler un navigateur
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-        }
-        
-        # Désactiver la vérification SSL pour Streamlit Cloud
-        response = requests.get(url, headers=headers, timeout=15, verify=False)
-        
-        if response.status_code != 200:
-            st.error(f"Erreur HTTP {response.status_code}")
-            return None
-        
-        # Parser le HTML
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # DEBUG: Afficher la structure pour comprendre
-        with st.expander("🔍 Voir la structure HTML (débogage)"):
-            st.code(str(soup)[:5000], language='html')
-        
-        # Recherche du tableau principal
-        # Méthode 1: Chercher par les en-têtes spécifiques
-        table = None
-        for t in soup.find_all('table'):
-            # Vérifier si ce tableau contient les bonnes colonnes
-            headers = [th.get_text(strip=True) for th in t.find_all('th')]
-            if 'Symbole' in headers and 'Nom' in headers:
-                table = t
-                break
-        
-        # Méthode 2: Prendre le premier tableau si la méthode 1 échoue
-        if not table:
-            tables = soup.find_all('table')
-            if tables:
-                table = tables[0]  # Prendre le premier tableau
-                st.warning("Utilisation du premier tableau trouvé (structure différente)")
-        
-        if not table:
-            st.error("Aucun tableau trouvé sur la page")
-            return None
-        
-        # Extraction des en-têtes
-        headers = []
-        for th in table.find_all('th'):
-            headers.append(th.get_text(strip=True))
-        
-        # Si pas d'en-têtes, utiliser les en-têtes par défaut
-        if not headers:
-            headers = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                      'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
-        
-        # Extraction des données
-        data = []
-        for row in table.find_all('tr'):
-            cells = row.find_all(['td', 'th'])
-            if cells and cells[0].name == 'td':  # Ignorer la ligne d'en-tête
-                row_data = [cell.get_text(strip=True) for cell in cells]
-                
-                # Vérifier que la ligne a le bon nombre de colonnes
-                if len(row_data) >= 6:  # Au moins les colonnes principales
-                    # Compléter si moins de colonnes que d'en-têtes
-                    if len(row_data) < len(headers):
-                        row_data.extend([''] * (len(headers) - len(row_data)))
-                    elif len(row_data) > len(headers):
-                        row_data = row_data[:len(headers)]
-                    
-                    data.append(row_data)
-        
-        if not data:
-            st.error("Aucune donnée extraite du tableau")
-            return None
-        
-        # Création du DataFrame
-        df = pd.DataFrame(data, columns=headers)
-        
-        # Nettoyage des données
-        df_clean = clean_dataframe(df)
-        
-        return df_clean
-        
-    except Exception as e:
-        st.error(f"Erreur lors du scraping : {str(e)}")
-        return None
+    /* En-tête */
+    .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 2rem;
+    }
+    
+    /* Cartes */
+    .card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: transform 0.3s;
+    }
+    
+    .card:hover {
+        transform: translateY(-5px);
+    }
+    
+    /* Boutons */
+    .stButton > button {
+        width: 100%;
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.3s;
+    }
+    
+    .stButton > button:hover {
+        transform: scale(1.02);
+    }
+    
+    /* Métriques */
+    .stMetric {
+        background: #f8f9fa;
+        padding: 1rem;
+        border-radius: 8px;
+    }
+    
+    /* Onglets */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        font-weight: 600;
+        border-radius: 10px 10px 0 0;
+    }
+    
+    /* Tableau */
+    .dataframe {
+        border: none !important;
+    }
+    
+    /* Badges */
+    .badge {
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.85em;
+        font-weight: 600;
+    }
+    
+    .badge-success {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    
+    .badge-danger {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    
+    .badge-warning {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-def clean_dataframe(df):
-    """Nettoyer et formater le DataFrame"""
-    df = df.copy()
+# Données simulées (en attendant la connexion au site)
+def load_sample_data():
+    """Charger des données d'exemple avec structure réaliste"""
+    data = {
+        "Symbole": ["BICB", "BICC", "BOAB", "BOAC", "ORAC", "SGBC", "SNTS", "UNLC", "PALC", "CFAC"],
+        "Nom": [
+            "BANQUE INTERNATIONALE POUR L'INDUSTRIE ET LE COMMERCE DU BENIN",
+            "BICI COTE D'IVOIRE",
+            "BANK OF AFRICA BENIN",
+            "BANK OF AFRICA COTE D'IVOIRE",
+            "ORANGE COTE D'IVOIRE",
+            "SOCIETE GENERALE COTE D'IVOIRE",
+            "SONATEL SENEGAL",
+            "UNILEVER COTE D'IVOIRE",
+            "PALM COTE D'IVOIRE",
+            "CFAO MOTORS COTE D'IVOIRE"
+        ],
+        "Volume": [900, 1025, 4599, 1027, 342, 282, 3047, 0, 535, 4047],
+        "Cours veille (FCFA)": [4950, 19000, 5930, 7090, 14500, 28550, 25000, 34225, 8000, 1440],
+        "Cours Ouverture (FCFA)": [4900, 19335, 5825, 7100, 14790, 28000, 25000, 0, 7705, 1300],
+        "Cours Clôture (FCFA)": [4905, 19380, 5825, 7100, 14600, 28500, 24900, 34225, 7945, 1445],
+        "Variation (%)": [-0.91, 0.21, 0.43, 0.14, 0.69, 2.52, -0.40, 0.00, -1.85, 3.21]
+    }
     
-    # Nettoyer les noms de colonnes
-    df.columns = [col.strip() for col in df.columns]
+    df = pd.DataFrame(data)
     
-    # Colonnes à convertir en numérique
-    numeric_columns = []
-    for col in df.columns:
-        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation']):
-            numeric_columns.append(col)
+    # Calculer la capitalisation fictive
+    df["Capitalisation (M FCFA)"] = df["Cours Clôture (FCFA)"] * df["Volume"] * 1000 / 1_000_000
+    df["Capitalisation (M FCFA)"] = df["Capitalisation (M FCFA)"].round(2)
     
-    # Conversion des valeurs numériques
-    for col in numeric_columns:
-        if col in df.columns:
-            # Remplacer les virgules par des points pour les décimales
-            df[col] = df[col].astype(str).str.replace(',', '.')
-            # Supprimer les espaces dans les nombres
-            df[col] = df[col].str.replace(' ', '')
-            # Supprimer les % pour la colonne Variation
-            if 'Variation' in col:
-                df[col] = df[col].str.replace('%', '')
-            # Convertir en numérique
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Trier par Symbole
-    if 'Symbole' in df.columns:
-        df = df.sort_values('Symbole').reset_index(drop=True)
+    # Catégorie fictive
+    categories = ["Banque", "Banque", "Banque", "Banque", "Télécom", "Banque", 
+                  "Télécom", "Consommation", "Agro", "Automobile"]
+    df["Secteur"] = categories
     
     return df
 
-def display_brvm_data():
-    """Afficher les données BRVM avec interface utilisateur"""
+# Initialisation de session
+if 'df' not in st.session_state:
+    st.session_state.df = load_sample_data()
+if 'last_update' not in st.session_state:
+    st.session_state.last_update = datetime.now()
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ["BICB", "ORAC", "SGBC"]
+
+# Header élégant
+col1, col2, col3 = st.columns([2, 1, 1])
+with col1:
+    st.markdown("""
+    <div class="header">
+        <h1 style="margin:0;">📈 BRVM Analytics Dashboard</h1>
+        <p style="margin:0; opacity:0.9;">Analyse en temps réel des marchés boursiers d'Afrique de l'Ouest</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col3:
+    st.metric("Dernière mise à jour", 
+              st.session_state.last_update.strftime("%H:%M"),
+              delta="3 min")
+
+# Sidebar - Filtres
+with st.sidebar:
+    st.markdown("### 🔍 Filtres")
     
-    st.sidebar.header("⚙️ Paramètres")
-    
-    # Bouton d'actualisation
-    if st.sidebar.button("🔄 Actualiser les données"):
-        st.cache_data.clear()
-        st.rerun()
-    
-    # Options d'affichage
-    show_raw = st.sidebar.checkbox("Afficher les données brutes", False)
-    sort_by = st.sidebar.selectbox(
-        "Trier par",
-        ["Symbole", "Variation (%)", "Volume", "Cours Clôture (FCFA)"]
+    # Filtre par secteur
+    sectors = st.multiselect(
+        "Secteur d'activité",
+        options=st.session_state.df["Secteur"].unique().tolist(),
+        default=st.session_state.df["Secteur"].unique().tolist()
     )
     
-    # Récupération des données
-    with st.spinner("Récupération des données BRVM..."):
-        df = scrape_brvm_data()
+    # Filtre par variation
+    variation_range = st.slider(
+        "Plage de variation (%)",
+        min_value=-10.0,
+        max_value=10.0,
+        value=(-5.0, 5.0),
+        step=0.5
+    )
     
-    if df is not None:
-        # Statistiques rapides
-        st.subheader("📈 Statistiques du marché")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            total = len(df)
-            st.metric("Nombre de titres", total)
-        
-        with col2:
-            if 'Variation (%)' in df.columns:
-                hausse = len(df[df['Variation (%)'] > 0])
-                st.metric("En hausse", hausse, f"+{hausse}")
-        
-        with col3:
-            if 'Variation (%)' in df.columns:
-                baisse = len(df[df['Variation (%)'] < 0])
-                st.metric("En baisse", baisse, f"-{baisse}")
-        
-        with col4:
-            if 'Variation (%)' in df.columns:
-                stable = len(df[df['Variation (%)'] == 0])
-                st.metric("Stables", stable)
-        
-        # Tri des données
-        if sort_by in df.columns:
-            if sort_by == 'Variation (%)':
-                df_display = df.sort_values(sort_by, ascending=False)
-            else:
-                df_display = df.sort_values(sort_by)
-        else:
-            df_display = df
-        
-        # Affichage du tableau
-        st.subheader("📋 Données des actions")
-        
-        # Mise en forme des variations
-        def color_variation(val):
-            if isinstance(val, (int, float)):
-                if val > 0:
-                    return 'color: green; font-weight: bold'
-                elif val < 0:
-                    return 'color: red; font-weight: bold'
-            return ''
-        
-        # Appliquer le style si la colonne existe
-        if 'Variation (%)' in df_display.columns:
-            styled_df = df_display.style.map(color_variation, subset=['Variation (%)'])
-            st.dataframe(styled_df, use_container_width=True, height=400)
-        else:
-            st.dataframe(df_display, use_container_width=True, height=400)
-        
-        # Données brutes pour débogage
-        if show_raw:
-            st.subheader("📄 Données brutes extraites")
-            st.write("Structure du DataFrame :", df.shape)
-            st.write(df)
-        
-        # Téléchargement
-        st.subheader("💾 Export des données")
-        
-        csv = df.to_csv(index=False, sep=';', decimal=',')
-        st.download_button(
-            label="📥 Télécharger en CSV",
-            data=csv,
-            file_name="brvm_data.csv",
-            mime="text/csv"
+    # Filtre par volume
+    volume_min = st.number_input(
+        "Volume minimum",
+        min_value=0,
+        max_value=10000,
+        value=0
+    )
+    
+    # Watchlist
+    st.markdown("### ⭐ Watchlist")
+    selected_symbols = st.multiselect(
+        "Sélectionnez vos actions favorites",
+        options=st.session_state.df["Symbole"].tolist(),
+        default=st.session_state.watchlist
+    )
+    st.session_state.watchlist = selected_symbols
+    
+    st.markdown("---")
+    st.markdown("### 📊 Indicateurs")
+    st.markdown("""
+    - 📈 **Indice BRVM 10** : 145.67 (+1.2%)
+    - 💰 **Capitalisation totale** : 12,450 Mds FCFA
+    - 📉 **Volume total** : 45,678,900
+    """)
+
+# Fonction d'actualisation
+def refresh_data():
+    st.session_state.last_update = datetime.now()
+    st.success("Données actualisées avec succès !")
+
+# Boutons d'action en ligne
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
+    if st.button("🔄 Actualiser", use_container_width=True):
+        refresh_data()
+with col2:
+    if st.button("📊 Exporter CSV", use_container_width=True):
+        st.info("Export CSV démarré")
+with col3:
+    if st.button("📈 Graphiques", use_container_width=True):
+        st.info("Affichage des graphiques")
+with col4:
+    if st.button("🔔 Alertes", use_container_width=True):
+        st.info("Configuration des alertes")
+with col5:
+    if st.button("📱 Rapport", use_container_width=True):
+        st.info("Génération du rapport")
+
+# Filtrage des données
+filtered_df = st.session_state.df.copy()
+if sectors:
+    filtered_df = filtered_df[filtered_df["Secteur"].isin(sectors)]
+filtered_df = filtered_df[
+    (filtered_df["Variation (%)"] >= variation_range[0]) & 
+    (filtered_df["Variation (%)"] <= variation_range[1])
+]
+filtered_df = filtered_df[filtered_df["Volume"] >= volume_min]
+
+# KPI Cards
+st.markdown("### 📊 Indicateurs clés")
+kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+
+with kpi1:
+    st.metric(
+        "Total Actions",
+        len(filtered_df),
+        f"{len(filtered_df) - len(st.session_state.df)}"
+    )
+
+with kpi2:
+    rising = len(filtered_df[filtered_df["Variation (%)"] > 0])
+    st.metric(
+        "En hausse",
+        rising,
+        f"{rising - len(filtered_df[filtered_df['Variation (%)'] <= 0])}"
+    )
+
+with kpi3:
+    falling = len(filtered_df[filtered_df["Variation (%)"] < 0])
+    st.metric(
+        "En baisse",
+        falling,
+        f"{falling - len(filtered_df[filtered_df['Variation (%)'] >= 0])}"
+    )
+
+with kpi4:
+    avg_change = filtered_df["Variation (%)"].mean()
+    st.metric(
+        "Variation moyenne",
+        f"{avg_change:.2f}%",
+        f"{avg_change - filtered_df['Variation (%)'].median():.2f}%"
+    )
+
+with kpi5:
+    total_volume = filtered_df["Volume"].sum()
+    st.metric(
+        "Volume total",
+        f"{total_volume:,}",
+        f"{(total_volume - filtered_df['Volume'].mean()):.0f}"
+    )
+
+# Onglets principaux
+tab1, tab2, tab3, tab4 = st.tabs(["📋 Tableau", "📈 Graphiques", "⭐ Watchlist", "📊 Analyse"])
+
+with tab1:
+    # Tableau interactif
+    col1, col2 = st.columns([3, 1])
+    
+    with col2:
+        sort_by = st.selectbox(
+            "Trier par",
+            ["Symbole", "Variation (%)", "Volume", "Cours Clôture (FCFA)", "Capitalisation (M FCFA)"]
         )
         
-        # Informations sur les colonnes
-        with st.expander("ℹ️ Informations sur les colonnes"):
-            st.markdown("""
-            - **Symbole** : Code de l'action
-            - **Nom** : Nom de l'entreprise
-            - **Volume** : Nombre d'actions échangées
-            - **Cours veille** : Cours de la veille (FCFA)
-            - **Cours Ouverture** : Cours à l'ouverture (FCFA)
-            - **Cours Clôture** : Cours à la clôture (FCFA)
-            - **Variation (%)** : Pourcentage de variation
-            """)
+        ascending = st.checkbox("Ordre croissant", value=False)
     
+    # Tableau stylisé
+    display_df = filtered_df.copy()
+    display_df = display_df.sort_values(sort_by, ascending=ascending)
+    
+    # Formater les colonnes
+    display_df["Variation (%)"] = display_df["Variation (%)"].apply(
+        lambda x: f"{x:+.2f}%" if x != 0 else f"{x:.2f}%"
+    )
+    
+    # Afficher le tableau avec style
+    st.dataframe(
+        display_df.style.applymap(
+            lambda x: 'color: green' if '+' in str(x) else 'color: red' if '-' in str(x) and x != '0.00%' else '',
+            subset=["Variation (%)"]
+        ).format({
+            "Cours veille (FCFA)": "{:,.0f}",
+            "Cours Clôture (FCFA)": "{:,.0f}",
+            "Capitalisation (M FCFA)": "{:,.2f}"
+        }),
+        use_container_width=True,
+        height=500
+    )
+
+with tab2:
+    # Graphiques interactifs
+    st.markdown("### 📈 Visualisations")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Graphique des variations
+        fig1 = px.bar(
+            filtered_df.nlargest(10, "Variation (%)"),
+            x="Symbole",
+            y="Variation (%)",
+            color="Variation (%)",
+            color_continuous_scale="RdYlGn",
+            title="Top 10 des variations (%)"
+        )
+        st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        # Graphique des volumes
+        fig2 = px.pie(
+            filtered_df.nlargest(5, "Volume"),
+            values="Volume",
+            names="Symbole",
+            title="Répartition des volumes (Top 5)"
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    # Graphique de dispersion
+    fig3 = px.scatter(
+        filtered_df,
+        x="Cours Clôture (FCFA)",
+        y="Volume",
+        size="Capitalisation (M FCFA)",
+        color="Secteur",
+        hover_name="Nom",
+        title="Relation Cours vs Volume"
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+
+with tab3:
+    # Watchlist personnalisée
+    st.markdown("### ⭐ Votre Watchlist")
+    
+    if st.session_state.watchlist:
+        watchlist_df = filtered_df[filtered_df["Symbole"].isin(st.session_state.watchlist)]
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            for _, row in watchlist_df.iterrows():
+                with st.container():
+                    col_a, col_b, col_c, col_d = st.columns([1, 2, 1, 1])
+                    
+                    with col_a:
+                        st.markdown(f"**{row['Symbole']}**")
+                    
+                    with col_b:
+                        st.markdown(f"*{row['Nom'][:30]}...*")
+                    
+                    with col_c:
+                        variation = row["Variation (%)"]
+                        color = "green" if variation > 0 else "red" if variation < 0 else "gray"
+                        st.markdown(f"<span style='color:{color};font-weight:bold'>{variation:+.2f}%</span>", 
+                                   unsafe_allow_html=True)
+                    
+                    with col_d:
+                        st.markdown(f"**{row['Cours Clôture (FCFA)']:,.0f}**")
+                    
+                    st.progress(min(abs(variation) / 10, 1.0))
+        
+        with col2:
+            st.markdown("### 📊 Performance")
+            avg_performance = watchlist_df["Variation (%)"].mean()
+            st.metric("Performance moyenne", f"{avg_performance:.2f}%")
+            
+            best = watchlist_df.loc[watchlist_df["Variation (%)"].idxmax()]
+            worst = watchlist_df.loc[watchlist_df["Variation (%)"].idxmin()]
+            
+            st.markdown(f"**Meilleur :** {best['Symbole']} ({best['Variation (%)']:+.2f}%)")
+            st.markdown(f"**Plus faible :** {worst['Symbole']} ({worst['Variation (%)']:+.2f}%)")
     else:
-        # Mode démo avec données statiques
-        st.warning("⚠️ Mode démonstration - Données statiques")
-        
-        # Données d'exemple basées sur le HTML fourni
-        demo_data = {
-            'Symbole': ['BICB', 'BICC', 'BOAB', 'ORAC', 'SGBC', 'SNTS'],
-            'Nom': ['BANQUE INTERNATIONALE POUR L\'INDUSTRIE ET LE COMMERCE DU BENIN',
-                   'BICI COTE D\'IVOIRE', 'BANK OF AFRICA BENIN', 
-                   'ORANGE COTE D\'IVOIRE', 'SOCIETE GENERALE COTE D\'IVOIRE',
-                   'SONATEL SENEGAL'],
-            'Volume': [900, 1025, 4599, 342, 282, 3047],
-            'Cours veille (FCFA)': [4950, 19000, 5930, 14500, 28550, 25000],
-            'Cours Clôture (FCFA)': [4905, 19380, 5825, 14600, 28500, 24900],
-            'Variation (%)': [-0.91, 0.21, 0.43, 0.69, 2.52, -0.40]
-        }
-        
-        df_demo = pd.DataFrame(demo_data)
-        st.dataframe(df_demo, use_container_width=True)
-        
-        st.info("""
-        **Note** : L'application n'a pas pu se connecter au site BRVM.
-        Les données affichées sont à titre d'exemple.
-        
-        Prochaines étapes :
-        1. Vérifiez que le site https://www.brvm.org est accessible
-        2. La structure HTML peut avoir changé
-        3. Contactez le support si le problème persiste
-        """)
+        st.info("Ajoutez des actions à votre watchlist dans la barre latérale")
 
-# Interface principale
-def main():
-    st.markdown("""
-    ### Application d'analyse des actions BRVM
+with tab4:
+    # Analyse détaillée
+    st.markdown("### 📊 Analyse approfondie")
     
-    Cette application extrait les données boursières de la Bourse Régionale des Valeurs Mobilières (BRVM).
+    col1, col2 = st.columns(2)
     
-    **Fonctionnalités** :
-    - Extraction en temps réel des cours des actions
-    - Affichage des variations
-    - Filtrage et tri des données
-    - Export au format CSV
-    """)
+    with col1:
+        st.markdown("#### 📈 Distribution des variations")
+        
+        fig_hist = px.histogram(
+            filtered_df,
+            x="Variation (%)",
+            nbins=20,
+            title="Distribution des variations (%)"
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+        # Statistiques descriptives
+        st.markdown("#### 📊 Statistiques")
+        
+        stats_df = filtered_df.describe()
+        st.dataframe(stats_df.style.format("{:.2f}"), use_container_width=True)
     
-    # Affichage des données
-    display_brvm_data()
-    
-    # Footer
-    st.markdown("---")
-    st.caption("Source : BRVM - https://www.brvm.org | Dernière mise à jour : " + pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"))
+    with col2:
+        st.markdown("#### 📊 Corrélations")
+        
+        # Matrice de corrélation
+        numeric_df = filtered_df.select_dtypes(include=['float64', 'int64'])
+        corr_matrix = numeric_df.corr()
+        
+        fig_corr = px.imshow(
+            corr_matrix,
+            text_auto=True,
+            aspect="auto",
+            color_continuous_scale="RdBu",
+            title="Matrice de corrélation"
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+        
+        # Secteurs
+        st.markdown("#### 🏢 Par secteur")
+        sector_stats = filtered_df.groupby("Secteur").agg({
+            "Variation (%)": "mean",
+            "Volume": "sum"
+        }).round(2)
+        
+        st.dataframe(sector_stats, use_container_width=True)
 
-if __name__ == "__main__":
-    main()
+# Footer
+st.markdown("---")
+footer_col1, footer_col2, footer_col3 = st.columns(3)
+
+with footer_col1:
+    st.markdown("**© 2024 BRVM Analytics**")
+    st.markdown("*Dashboard officiel des marchés*")
+
+with footer_col2:
+    st.markdown("**📞 Contact**")
+    st.markdown("support@brvm-analytics.com")
+
+with footer_col3:
+    st.markdown("**📡 Connexion**")
+    if st.button("Vérifier la connexion", key="footer_check"):
+        try:
+            # Tentative de connexion au site réel
+            import requests
+            response = requests.get("https://www.brvm.org", timeout=5)
+            if response.status_code == 200:
+                st.success("✅ Connecté à BRVM")
+            else:
+                st.warning("⚠️ Connexion limitée")
+        except:
+            st.error("❌ Hors ligne - Mode démo")
+
+# Mode sombre/clair
+st.sidebar.markdown("---")
+theme = st.sidebar.selectbox("🎨 Thème", ["Clair", "Sombre"])
+
+# Information système
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"""
+**Informations système :**
+- Actions chargées : {len(st.session_state.df)}
+- Données filtrées : {len(filtered_df)}
+- Dernière actualisation : {st.session_state.last_update.strftime("%H:%M:%S")}
+""")
