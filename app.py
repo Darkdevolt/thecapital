@@ -18,7 +18,7 @@ DEVELOPER_PASSWORD = "dev_brvm_2024"
 # CONFIGURATION SUPABASE
 # ===========================
 
-# Configuration Supabase - UTILISEZ VOS CLÉS ICI
+# Configuration Supabase
 SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
 SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
 
@@ -29,7 +29,6 @@ def init_supabase():
             st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
             # Test de connexion
             test_response = st.session_state.supabase.table("financial_data").select("*", count="exact").limit(1).execute()
-            print(f"✅ Connexion Supabase établie")
         except Exception as e:
             st.error(f"❌ Erreur de connexion Supabase: {str(e)}")
             return None
@@ -58,7 +57,6 @@ def load_all_financial_data():
                 'last_update': record.get('last_update', None)
             }
         
-        print(f"✅ {len(financial_data)} enregistrements chargés depuis Supabase")
         return financial_data
         
     except Exception as e:
@@ -215,10 +213,23 @@ def developer_section():
     # Interface de gestion des données
     st.success("✅ Connecté en tant que développeur")
     
+    # Charger les données BRVM pour récupérer les cours
+    col_refresh1, col_refresh2 = st.columns([3, 1])
+    with col_refresh1:
+        st.info("💡 Les cours sont automatiquement récupérés depuis BRVM")
+    with col_refresh2:
+        if st.button("🔄 Actualiser les cours", use_container_width=True):
+            st.cache_data.clear()
+            st.success("Cours actualisés!")
+            st.rerun()
+    
+    with st.spinner("Chargement des cours BRVM..."):
+        df_brvm = scrape_brvm_data()
+    
     # Initialiser le stockage
     financial_data = init_storage()
     
-    # Section de gestion des données
+    # Sélection du symbole
     col1, col2 = st.columns([3, 1])
     with col1:
         symbole = st.text_input("Symbole de l'action (ex: SNTS, SGBC, BICC)", key="symbole_input").upper()
@@ -226,7 +237,60 @@ def developer_section():
         annee = st.number_input("Année", min_value=2015, max_value=2030, value=2024)
     
     if symbole:
+        # Vérifier si le symbole existe dans les données BRVM
+        symbole_existe = False
+        cours_brvm = 0
+        nom_societe = ""
+        variation = 0
+        
+        if df_brvm is not None and 'Symbole' in df_brvm.columns:
+            if symbole in df_brvm['Symbole'].values:
+                symbole_existe = True
+                ligne = df_brvm[df_brvm['Symbole'] == symbole].iloc[0]
+                
+                # Récupérer le nom de la société si disponible
+                if 'Nom' in df_brvm.columns:
+                    nom_societe = ligne['Nom']
+                
+                # Chercher le cours de clôture
+                for col in df_brvm.columns:
+                    if 'Cours' in col and ('Clôture' in col or 'Cloture' in col):
+                        try:
+                            cours_brvm = float(ligne[col])
+                            break
+                        except:
+                            continue
+                
+                # Si pas trouvé, chercher n'importe quelle colonne avec "Cours"
+                if cours_brvm == 0:
+                    for col in df_brvm.columns:
+                        if 'Cours' in col:
+                            try:
+                                cours_brvm = float(ligne[col])
+                                break
+                            except:
+                                continue
+                
+                # Chercher la variation si disponible
+                if 'Variation (%)' in df_brvm.columns:
+                    try:
+                        variation = float(ligne['Variation (%)'])
+                    except:
+                        variation = 0
+        
         st.subheader(f"📊 Données financières pour {symbole} - {annee}")
+        
+        if symbole_existe and nom_societe:
+            if variation > 0:
+                st.success(f"✅ {nom_societe} - Cours: {cours_brvm:,.0f} FCFA (+{variation}%)")
+            elif variation < 0:
+                st.warning(f"⚠️ {nom_societe} - Cours: {cours_brvm:,.0f} FCFA ({variation}%)")
+            else:
+                st.info(f"ℹ️ {nom_societe} - Cours: {cours_brvm:,.0f} FCFA")
+        elif symbole_existe:
+            st.info(f"ℹ️ Symbole {symbole} trouvé - Cours: {cours_brvm:,.0f} FCFA")
+        else:
+            st.warning(f"⚠️ Symbole {symbole} non trouvé dans les données BRVM")
         
         # Créer les onglets pour les différents états financiers
         tab1, tab2, tab3, tab4 = st.tabs(["📈 Bilan", "💰 Compte de Résultat", "💵 Flux de Trésorerie", "📊 Ratios Calculés"])
@@ -280,9 +344,28 @@ def developer_section():
             st.markdown("**Informations Marché**")
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
-                cours_action = st.number_input("Cours de l'action (FCFA)", value=float(existing_data.get('bilan', {}).get('cours_action', 0)), step=100.0, key=f"cours_{data_key}")
+                # Cours automatique ou manuel
+                if symbole_existe and cours_brvm > 0:
+                    cours_action = st.number_input(
+                        f"Cours de {symbole} (FCFA)", 
+                        value=float(cours_brvm), 
+                        step=100.0, 
+                        key=f"cours_{data_key}",
+                        help=f"Cours actuel sur BRVM: {cours_brvm:,.0f} FCFA"
+                    )
+                    st.caption(f"📈 Cours BRVM: {cours_brvm:,.0f} FCFA")
+                else:
+                    cours_action = st.number_input(
+                        f"Cours de {symbole} (FCFA)", 
+                        value=float(existing_data.get('bilan', {}).get('cours_action', 0)), 
+                        step=100.0, 
+                        key=f"cours_{data_key}",
+                        help="Symbole non trouvé - saisie manuelle requise"
+                    )
+            
             with col_m2:
                 nb_actions = st.number_input("Nombre d'actions", value=int(existing_data.get('bilan', {}).get('nb_actions', 0)), step=1000, key=f"nb_actions_{data_key}")
+            
             with col_m3:
                 if nb_actions > 0 and capitaux_propres > 0:
                     cap_propres_par_action = capitaux_propres / nb_actions
@@ -305,7 +388,8 @@ def developer_section():
                 'passif_total': passif_total,
                 'cours_action': cours_action,
                 'nb_actions': nb_actions,
-                'capitaux_propres_par_action': cap_propres_par_action
+                'capitaux_propres_par_action': cap_propres_par_action,
+                'cours_source': 'auto' if (symbole_existe and cours_brvm > 0) else 'manual'
             }
         
         with tab2:
@@ -832,6 +916,7 @@ def main():
         2. **Analyse fondamentale** : Calcul des ratios financiers
         3. **Stockage cloud** : Persistance des données via Supabase
         4. **Interface développeur** : Gestion des données financières
+        5. **Cours automatiques** : Récupération directe depuis BRVM
         
         ### Configuration technique
         
