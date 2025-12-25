@@ -5,22 +5,132 @@ from bs4 import BeautifulSoup
 import warnings
 import json
 from datetime import datetime
+from supabase import create_client
 warnings.filterwarnings('ignore')
 
 # Configuration
 st.set_page_config(page_title="Analyse BRVM", layout="wide")
 
-# Mot de passe développeur (à changer)
+# Mot de passe développeur
 DEVELOPER_PASSWORD = "dev_brvm_2024"
 
 # ===========================
-# GESTION DES DONNÉES FINANCIÈRES (CLOUD STORAGE)
+# CONFIGURATION SUPABASE
 # ===========================
 
+# Configuration Supabase - UTILISEZ VOS CLÉS ICI
+SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
+SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
+
+def init_supabase():
+    """Initialiser la connexion à Supabase"""
+    if 'supabase' not in st.session_state:
+        try:
+            st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            # Test de connexion
+            test_response = st.session_state.supabase.table("financial_data").select("*", count="exact").limit(1).execute()
+            print(f"✅ Connexion Supabase établie")
+        except Exception as e:
+            st.error(f"❌ Erreur de connexion Supabase: {str(e)}")
+            return None
+    return st.session_state.supabase
+
+def load_all_financial_data():
+    """Charger toutes les données financières depuis Supabase"""
+    supabase = init_supabase()
+    if not supabase:
+        return {}
+    
+    try:
+        # Récupérer toutes les données
+        response = supabase.table("financial_data").select("*").execute()
+        
+        financial_data = {}
+        for record in response.data:
+            key = f"{record['symbole']}_{record['annee']}"
+            financial_data[key] = {
+                'symbole': record['symbole'],
+                'annee': record['annee'],
+                'bilan': record['data'].get('bilan', {}),
+                'compte_resultat': record['data'].get('compte_resultat', {}),
+                'flux_tresorerie': record['data'].get('flux_tresorerie', {}),
+                'ratios': record['data'].get('ratios', {}),
+                'last_update': record.get('last_update', None)
+            }
+        
+        print(f"✅ {len(financial_data)} enregistrements chargés depuis Supabase")
+        return financial_data
+        
+    except Exception as e:
+        st.error(f"Erreur de chargement depuis Supabase: {str(e)}")
+        return {}
+
+def save_financial_data(symbole, annee, data_dict):
+    """Sauvegarder les données dans Supabase"""
+    supabase = init_supabase()
+    if not supabase:
+        return False
+    
+    try:
+        # Préparer l'enregistrement
+        record = {
+            'symbole': symbole,
+            'annee': annee,
+            'data': data_dict,
+            'last_update': datetime.now().isoformat()
+        }
+        
+        # Vérifier si l'entrée existe déjà
+        existing = supabase.table("financial_data")\
+            .select("*")\
+            .eq("symbole", symbole)\
+            .eq("annee", annee)\
+            .execute()
+        
+        if existing.data:
+            # Mise à jour
+            response = supabase.table("financial_data")\
+                .update(record)\
+                .eq("symbole", symbole)\
+                .eq("annee", annee)\
+                .execute()
+        else:
+            # Insertion
+            response = supabase.table("financial_data").insert(record).execute()
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Erreur de sauvegarde dans Supabase: {str(e)}")
+        return False
+
+def delete_financial_data(symbole, annee):
+    """Supprimer des données de Supabase"""
+    supabase = init_supabase()
+    if not supabase:
+        return False
+    
+    try:
+        response = supabase.table("financial_data")\
+            .delete()\
+            .eq("symbole", symbole)\
+            .eq("annee", annee)\
+            .execute()
+        return True
+    except Exception as e:
+        st.error(f"Erreur de suppression: {str(e)}")
+        return False
+
 def init_storage():
-    """Initialiser le stockage cloud pour les données financières"""
+    """Initialiser le stockage avec Supabase"""
     if 'financial_data' not in st.session_state:
-        st.session_state.financial_data = {}
+        st.session_state.financial_data = load_all_financial_data()
+    
+    return st.session_state.financial_data
+
+# ===========================
+# FONCTIONS DE CALCUL DES RATIOS
+# ===========================
 
 def calculate_financial_ratios(bilan, compte_resultat, flux_tresorerie):
     """Calculer automatiquement les ratios financiers"""
@@ -80,6 +190,10 @@ def calculate_financial_ratios(bilan, compte_resultat, flux_tresorerie):
     
     return ratios
 
+# ===========================
+# SECTION DÉVELOPPEUR
+# ===========================
+
 def developer_section():
     """Section réservée au développeur pour gérer les données financières"""
     st.title("🔐 Section Développeur - Gestion des Données Financières")
@@ -102,9 +216,9 @@ def developer_section():
     st.success("✅ Connecté en tant que développeur")
     
     # Initialiser le stockage
-    init_storage()
+    financial_data = init_storage()
     
-    # Sélection du symbole
+    # Section de gestion des données
     col1, col2 = st.columns([3, 1])
     with col1:
         symbole = st.text_input("Symbole de l'action (ex: SNTS, SGBC, BICC)", key="symbole_input").upper()
@@ -121,16 +235,13 @@ def developer_section():
         data_key = f"{symbole}_{annee}"
         
         # Récupérer les données existantes
-        if data_key not in st.session_state.financial_data:
-            st.session_state.financial_data[data_key] = {
-                'bilan': {},
-                'compte_resultat': {},
-                'flux_tresorerie': {},
-                'ratios': {},
-                'last_update': None
-            }
-        
-        existing_data = st.session_state.financial_data[data_key]
+        existing_data = financial_data.get(data_key, {
+            'bilan': {},
+            'compte_resultat': {},
+            'flux_tresorerie': {},
+            'ratios': {},
+            'last_update': None
+        })
         
         with tab1:
             st.markdown("### 🏦 BILAN")
@@ -347,36 +458,49 @@ def developer_section():
         
         # Bouton de sauvegarde global
         st.markdown("---")
-        col_save1, col_save2 = st.columns([1, 1])
+        col_save1, col_save2, col_save3 = st.columns([1, 1, 1])
         
         with col_save1:
             if st.button("💾 Sauvegarder les Données", type="primary", use_container_width=True):
-                st.session_state.financial_data[data_key] = {
+                # Préparer les données pour Supabase
+                data_to_save = {
                     'symbole': symbole,
                     'annee': annee,
                     'bilan': bilan_data,
                     'compte_resultat': compte_resultat_data,
                     'flux_tresorerie': flux_tresorerie_data,
-                    'ratios': ratios,
-                    'last_update': datetime.now().isoformat()
+                    'ratios': ratios
                 }
-                st.success(f"✅ Données sauvegardées pour {symbole} - {annee}")
-                st.rerun()
+                
+                # Sauvegarder dans Supabase
+                if save_financial_data(symbole, annee, data_to_save):
+                    st.success(f"✅ Données sauvegardées dans le cloud pour {symbole} - {annee}")
+                    # Recharger les données
+                    st.session_state.financial_data = load_all_financial_data()
+                    st.rerun()
         
         with col_save2:
             if st.button("🗑️ Supprimer ces Données", use_container_width=True):
-                if data_key in st.session_state.financial_data:
-                    del st.session_state.financial_data[data_key]
-                    st.success("Données supprimées")
+                if delete_financial_data(symbole, annee):
+                    st.success(f"Données supprimées du cloud pour {symbole} - {annee}")
+                    # Recharger les données
+                    st.session_state.financial_data = load_all_financial_data()
                     st.rerun()
+        
+        with col_save3:
+            if st.button("🔄 Actualiser depuis le Cloud", use_container_width=True):
+                st.session_state.financial_data = load_all_financial_data()
+                st.success("Données actualisées depuis Supabase")
+                st.rerun()
         
         # Afficher toutes les données sauvegardées
         st.markdown("---")
-        st.subheader("📚 Données Financières Sauvegardées")
+        st.subheader("📚 Données Financières Sauvegardées (Cloud)")
         
-        if st.session_state.financial_data:
+        financial_data = init_storage()
+        if financial_data:
             saved_data = []
-            for key, data in st.session_state.financial_data.items():
+            for key, data in financial_data.items():
                 if isinstance(data, dict):
                     saved_data.append({
                         'Symbole': data.get('symbole', 'N/A'),
@@ -387,8 +511,9 @@ def developer_section():
             if saved_data:
                 df_saved = pd.DataFrame(saved_data)
                 st.dataframe(df_saved, use_container_width=True)
+                st.caption(f"Total: {len(saved_data)} enregistrements dans Supabase")
         else:
-            st.info("Aucune donnée financière sauvegardée pour le moment")
+            st.info("Aucune donnée financière sauvegardée dans le cloud")
 
 # ===========================
 # FONCTIONS DE SCRAPING BRVM
@@ -541,10 +666,11 @@ def display_brvm_data():
             symbole_selected = st.selectbox("Sélectionnez un titre pour voir son analyse fondamentale", symboles_list)
             
             if symbole_selected:
-                init_storage()
+                # Charger les données depuis Supabase
+                financial_data = init_storage()
                 
                 financial_records = []
-                for key, data in st.session_state.financial_data.items():
+                for key, data in financial_data.items():
                     if isinstance(data, dict) and data.get('symbole') == symbole_selected:
                         financial_records.append(data)
                 
@@ -663,31 +789,71 @@ def display_brvm_data():
 # ===========================
 
 def main():
-    st.title("📊 Analyse des titres BRVM")
+    st.title("📊 Analyse des titres BRVM avec Stockage Cloud")
     
     # Menu de navigation
     page = st.sidebar.radio(
         "Navigation",
-        ["🏠 Accueil & Cours", "🔐 Section Développeur"]
+        ["🏠 Accueil & Cours", "🔐 Section Développeur", "ℹ️ À propos"]
     )
     
     if page == "🏠 Accueil & Cours":
         st.markdown("""
-        ### Application d'analyse BRVM
+        ### Application d'analyse BRVM avec Stockage Cloud
+        
+        **Nouveau :** Toutes les données financières sont maintenant stockées dans le cloud (Supabase) et accessibles depuis n'importe où !
         
         Cette application vous permet de :
         - 📈 Consulter les cours en temps réel
         - 📊 Analyser les données fondamentales des sociétés cotées
+        - 💾 Stocker et partager les analyses financières
         - 💹 Suivre les variations et performances
         """)
+        
+        # Afficher les statistiques du cloud
+        financial_data = init_storage()
+        if financial_data:
+            st.sidebar.info(f"📦 {len(financial_data)} analyses stockées dans le cloud")
         
         display_brvm_data()
         
         st.markdown("---")
-        st.caption("Source : BRVM - https://www.brvm.org | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
+        st.caption("Source : BRVM - https://www.brvm.org | Données stockées dans Supabase | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
     
     elif page == "🔐 Section Développeur":
         developer_section()
+    
+    elif page == "ℹ️ À propos":
+        st.header("À propos de cette application")
+        st.markdown("""
+        ### Fonctionnalités principales
+        
+        1. **Scraping des données BRVM** : Récupération automatique des cours
+        2. **Analyse fondamentale** : Calcul des ratios financiers
+        3. **Stockage cloud** : Persistance des données via Supabase
+        4. **Interface développeur** : Gestion des données financières
+        
+        ### Configuration technique
+        
+        - **Framework** : Streamlit
+        - **Base de données** : Supabase (PostgreSQL)
+        - **Stockage** : 500 Mo gratuit
+        - **Déploiement** : Streamlit Cloud / GitHub
+        
+        ### Instructions de déploiement
+        
+        1. Créez un fichier `requirements.txt` :
+        ```
+        streamlit
+        pandas
+        requests
+        beautifulsoup4
+        supabase
+        ```
+        
+        2. Déployez sur Streamlit Cloud en connectant votre GitHub
+        3. Ajoutez vos secrets Supabase dans les paramètres
+        """)
 
 if __name__ == "__main__":
     main()
