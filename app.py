@@ -3,170 +3,503 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import warnings
+import json
+from datetime import datetime
 warnings.filterwarnings('ignore')
 
 # Configuration
 st.set_page_config(page_title="Analyse BRVM", layout="wide")
-st.title("📊 Analyse des titres BRVM")
 
-@st.cache_data(ttl=300)  # Cache 5 minutes
+# Mot de passe développeur (à changer)
+DEVELOPER_PASSWORD = "dev_brvm_2024"
+
+# ===========================
+# GESTION DES DONNÉES FINANCIÈRES (CLOUD STORAGE)
+# ===========================
+
+def init_storage():
+    """Initialiser le stockage cloud pour les données financières"""
+    if 'financial_data' not in st.session_state:
+        st.session_state.financial_data = {}
+
+def calculate_financial_ratios(bilan, compte_resultat, flux_tresorerie):
+    """Calculer automatiquement les ratios financiers"""
+    ratios = {}
+    
+    try:
+        # RATIOS DE RENTABILITÉ
+        if compte_resultat.get('resultat_net') and compte_resultat.get('chiffre_affaires'):
+            ratios['marge_nette'] = (compte_resultat['resultat_net'] / compte_resultat['chiffre_affaires']) * 100
+        
+        if compte_resultat.get('resultat_exploitation') and compte_resultat.get('chiffre_affaires'):
+            ratios['marge_exploitation'] = (compte_resultat['resultat_exploitation'] / compte_resultat['chiffre_affaires']) * 100
+        
+        if compte_resultat.get('resultat_net') and bilan.get('capitaux_propres'):
+            ratios['roe'] = (compte_resultat['resultat_net'] / bilan['capitaux_propres']) * 100
+        
+        if compte_resultat.get('resultat_net') and bilan.get('actif_total'):
+            ratios['roa'] = (compte_resultat['resultat_net'] / bilan['actif_total']) * 100
+        
+        # RATIOS DE LIQUIDITÉ
+        if bilan.get('actif_courant') and bilan.get('passif_courant'):
+            ratios['ratio_liquidite_generale'] = bilan['actif_courant'] / bilan['passif_courant']
+        
+        if bilan.get('tresorerie') and bilan.get('passif_courant'):
+            ratios['ratio_liquidite_immediate'] = bilan['tresorerie'] / bilan['passif_courant']
+        
+        # RATIOS D'ENDETTEMENT
+        if bilan.get('dettes_totales') and bilan.get('capitaux_propres'):
+            ratios['ratio_endettement'] = (bilan['dettes_totales'] / bilan['capitaux_propres']) * 100
+        
+        if bilan.get('dettes_totales') and bilan.get('actif_total'):
+            ratios['taux_endettement'] = (bilan['dettes_totales'] / bilan['actif_total']) * 100
+        
+        # RATIOS D'EFFICACITÉ
+        if compte_resultat.get('chiffre_affaires') and bilan.get('actif_total'):
+            ratios['rotation_actifs'] = compte_resultat['chiffre_affaires'] / bilan['actif_total']
+        
+        if compte_resultat.get('chiffre_affaires') and bilan.get('stocks') and bilan.get('stocks') > 0:
+            ratios['rotation_stocks'] = compte_resultat['chiffre_affaires'] / bilan['stocks']
+        
+        # RATIOS DE MARCHÉ
+        if bilan.get('cours_action') and compte_resultat.get('benefice_par_action') and compte_resultat.get('benefice_par_action') > 0:
+            ratios['per'] = bilan['cours_action'] / compte_resultat['benefice_par_action']
+        
+        if bilan.get('cours_action') and bilan.get('capitaux_propres_par_action') and bilan.get('capitaux_propres_par_action') > 0:
+            ratios['price_to_book'] = bilan['cours_action'] / bilan['capitaux_propres_par_action']
+        
+        # RATIOS DE FLUX DE TRÉSORERIE
+        if flux_tresorerie.get('flux_exploitation') and compte_resultat.get('resultat_net') and compte_resultat.get('resultat_net') != 0:
+            ratios['qualite_benefices'] = flux_tresorerie['flux_exploitation'] / compte_resultat['resultat_net']
+        
+        if flux_tresorerie.get('flux_exploitation') and bilan.get('passif_courant') and bilan.get('passif_courant') > 0:
+            ratios['couverture_dettes_courtes'] = flux_tresorerie['flux_exploitation'] / bilan['passif_courant']
+        
+    except Exception as e:
+        st.error(f"Erreur lors du calcul des ratios: {str(e)}")
+    
+    return ratios
+
+def developer_section():
+    """Section réservée au développeur pour gérer les données financières"""
+    st.title("🔐 Section Développeur - Gestion des Données Financières")
+    
+    # Authentification
+    if 'dev_authenticated' not in st.session_state:
+        st.session_state.dev_authenticated = False
+    
+    if not st.session_state.dev_authenticated:
+        password = st.text_input("Mot de passe développeur", type="password")
+        if st.button("Se connecter"):
+            if password == DEVELOPER_PASSWORD:
+                st.session_state.dev_authenticated = True
+                st.rerun()
+            else:
+                st.error("Mot de passe incorrect")
+        return
+    
+    # Interface de gestion des données
+    st.success("✅ Connecté en tant que développeur")
+    
+    # Initialiser le stockage
+    init_storage()
+    
+    # Sélection du symbole
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        symbole = st.text_input("Symbole de l'action (ex: SNTS, SGBC, BICC)", key="symbole_input").upper()
+    with col2:
+        annee = st.number_input("Année", min_value=2015, max_value=2030, value=2024)
+    
+    if symbole:
+        st.subheader(f"📊 Données financières pour {symbole} - {annee}")
+        
+        # Créer les onglets pour les différents états financiers
+        tab1, tab2, tab3, tab4 = st.tabs(["📈 Bilan", "💰 Compte de Résultat", "💵 Flux de Trésorerie", "📊 Ratios Calculés"])
+        
+        # Clé unique pour ce symbole et cette année
+        data_key = f"{symbole}_{annee}"
+        
+        # Récupérer les données existantes
+        if data_key not in st.session_state.financial_data:
+            st.session_state.financial_data[data_key] = {
+                'bilan': {},
+                'compte_resultat': {},
+                'flux_tresorerie': {},
+                'ratios': {},
+                'last_update': None
+            }
+        
+        existing_data = st.session_state.financial_data[data_key]
+        
+        with tab1:
+            st.markdown("### 🏦 BILAN")
+            
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.markdown("**ACTIF**")
+                actif_immobilise = st.number_input("Actif Immobilisé (FCFA)", value=float(existing_data.get('bilan', {}).get('actif_immobilise', 0)), step=1000000.0, key=f"actif_immo_{data_key}")
+                actif_courant = st.number_input("Actif Courant (FCFA)", value=float(existing_data.get('bilan', {}).get('actif_courant', 0)), step=1000000.0, key=f"actif_courant_{data_key}")
+                stocks = st.number_input("Stocks (FCFA)", value=float(existing_data.get('bilan', {}).get('stocks', 0)), step=1000000.0, key=f"stocks_{data_key}")
+                creances = st.number_input("Créances (FCFA)", value=float(existing_data.get('bilan', {}).get('creances', 0)), step=1000000.0, key=f"creances_{data_key}")
+                tresorerie = st.number_input("Trésorerie et équivalents (FCFA)", value=float(existing_data.get('bilan', {}).get('tresorerie', 0)), step=1000000.0, key=f"tresorerie_{data_key}")
+                
+                actif_total = actif_immobilise + actif_courant
+                st.metric("**ACTIF TOTAL**", f"{actif_total:,.0f} FCFA")
+            
+            with col_b:
+                st.markdown("**PASSIF**")
+                capitaux_propres = st.number_input("Capitaux Propres (FCFA)", value=float(existing_data.get('bilan', {}).get('capitaux_propres', 0)), step=1000000.0, key=f"cap_propres_{data_key}")
+                dettes_long_terme = st.number_input("Dettes Long Terme (FCFA)", value=float(existing_data.get('bilan', {}).get('dettes_long_terme', 0)), step=1000000.0, key=f"dettes_lt_{data_key}")
+                passif_courant = st.number_input("Passif Courant (FCFA)", value=float(existing_data.get('bilan', {}).get('passif_courant', 0)), step=1000000.0, key=f"passif_courant_{data_key}")
+                
+                dettes_totales = dettes_long_terme + passif_courant
+                passif_total = capitaux_propres + dettes_totales
+                
+                st.metric("**PASSIF TOTAL**", f"{passif_total:,.0f} FCFA")
+                
+                # Vérification de l'équilibre
+                if abs(actif_total - passif_total) > 1:
+                    st.error(f"⚠️ Bilan non équilibré ! Différence: {actif_total - passif_total:,.0f} FCFA")
+                else:
+                    st.success("✅ Bilan équilibré")
+            
+            # Informations complémentaires
+            st.markdown("**Informations Marché**")
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                cours_action = st.number_input("Cours de l'action (FCFA)", value=float(existing_data.get('bilan', {}).get('cours_action', 0)), step=100.0, key=f"cours_{data_key}")
+            with col_m2:
+                nb_actions = st.number_input("Nombre d'actions", value=int(existing_data.get('bilan', {}).get('nb_actions', 0)), step=1000, key=f"nb_actions_{data_key}")
+            with col_m3:
+                if nb_actions > 0 and capitaux_propres > 0:
+                    cap_propres_par_action = capitaux_propres / nb_actions
+                    st.metric("Cap. Propres / Action", f"{cap_propres_par_action:,.0f} FCFA")
+                else:
+                    cap_propres_par_action = 0
+            
+            # Sauvegarder les données du bilan
+            bilan_data = {
+                'actif_immobilise': actif_immobilise,
+                'actif_courant': actif_courant,
+                'stocks': stocks,
+                'creances': creances,
+                'tresorerie': tresorerie,
+                'actif_total': actif_total,
+                'capitaux_propres': capitaux_propres,
+                'dettes_long_terme': dettes_long_terme,
+                'passif_courant': passif_courant,
+                'dettes_totales': dettes_totales,
+                'passif_total': passif_total,
+                'cours_action': cours_action,
+                'nb_actions': nb_actions,
+                'capitaux_propres_par_action': cap_propres_par_action
+            }
+        
+        with tab2:
+            st.markdown("### 💰 COMPTE DE RÉSULTAT")
+            
+            chiffre_affaires = st.number_input("Chiffre d'Affaires (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('chiffre_affaires', 0)), step=1000000.0, key=f"ca_{data_key}")
+            charges_exploitation = st.number_input("Charges d'Exploitation (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('charges_exploitation', 0)), step=1000000.0, key=f"charges_exp_{data_key}")
+            
+            resultat_exploitation = chiffre_affaires - charges_exploitation
+            st.metric("Résultat d'Exploitation", f"{resultat_exploitation:,.0f} FCFA")
+            
+            charges_financieres = st.number_input("Charges Financières (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('charges_financieres', 0)), step=100000.0, key=f"charges_fin_{data_key}")
+            produits_financiers = st.number_input("Produits Financiers (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('produits_financiers', 0)), step=100000.0, key=f"prod_fin_{data_key}")
+            
+            resultat_financier = produits_financiers - charges_financieres
+            st.metric("Résultat Financier", f"{resultat_financier:,.0f} FCFA")
+            
+            resultat_avant_impot = resultat_exploitation + resultat_financier
+            st.metric("Résultat Avant Impôt", f"{resultat_avant_impot:,.0f} FCFA")
+            
+            impots = st.number_input("Impôts sur les sociétés (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('impots', 0)), step=100000.0, key=f"impots_{data_key}")
+            
+            resultat_net = resultat_avant_impot - impots
+            st.metric("**RÉSULTAT NET**", f"{resultat_net:,.0f} FCFA", delta=None)
+            
+            # Calcul par action
+            if nb_actions > 0:
+                benefice_par_action = resultat_net / nb_actions
+                st.metric("Bénéfice par Action (BPA)", f"{benefice_par_action:,.2f} FCFA")
+            else:
+                benefice_par_action = 0
+            
+            # Sauvegarder les données du compte de résultat
+            compte_resultat_data = {
+                'chiffre_affaires': chiffre_affaires,
+                'charges_exploitation': charges_exploitation,
+                'resultat_exploitation': resultat_exploitation,
+                'charges_financieres': charges_financieres,
+                'produits_financiers': produits_financiers,
+                'resultat_financier': resultat_financier,
+                'resultat_avant_impot': resultat_avant_impot,
+                'impots': impots,
+                'resultat_net': resultat_net,
+                'benefice_par_action': benefice_par_action
+            }
+        
+        with tab3:
+            st.markdown("### 💵 TABLEAU DES FLUX DE TRÉSORERIE")
+            
+            st.markdown("**Flux de Trésorerie d'Exploitation**")
+            flux_exploitation = st.number_input("Flux d'Exploitation (FCFA)", value=float(existing_data.get('flux_tresorerie', {}).get('flux_exploitation', 0)), step=1000000.0, key=f"flux_exp_{data_key}")
+            
+            st.markdown("**Flux de Trésorerie d'Investissement**")
+            flux_investissement = st.number_input("Flux d'Investissement (FCFA)", value=float(existing_data.get('flux_tresorerie', {}).get('flux_investissement', 0)), step=1000000.0, key=f"flux_inv_{data_key}")
+            
+            st.markdown("**Flux de Trésorerie de Financement**")
+            flux_financement = st.number_input("Flux de Financement (FCFA)", value=float(existing_data.get('flux_tresorerie', {}).get('flux_financement', 0)), step=1000000.0, key=f"flux_fin_{data_key}")
+            
+            variation_tresorerie = flux_exploitation + flux_investissement + flux_financement
+            st.metric("**Variation de Trésorerie**", f"{variation_tresorerie:,.0f} FCFA")
+            
+            # Sauvegarder les données des flux de trésorerie
+            flux_tresorerie_data = {
+                'flux_exploitation': flux_exploitation,
+                'flux_investissement': flux_investissement,
+                'flux_financement': flux_financement,
+                'variation_tresorerie': variation_tresorerie
+            }
+        
+        with tab4:
+            st.markdown("### 📊 RATIOS FINANCIERS CALCULÉS AUTOMATIQUEMENT")
+            
+            # Calculer les ratios
+            ratios = calculate_financial_ratios(bilan_data, compte_resultat_data, flux_tresorerie_data)
+            
+            if ratios:
+                col_r1, col_r2, col_r3 = st.columns(3)
+                
+                with col_r1:
+                    st.markdown("**📈 RENTABILITÉ**")
+                    if 'marge_nette' in ratios:
+                        st.metric("Marge Nette", f"{ratios['marge_nette']:.2f}%")
+                    if 'marge_exploitation' in ratios:
+                        st.metric("Marge d'Exploitation", f"{ratios['marge_exploitation']:.2f}%")
+                    if 'roe' in ratios:
+                        st.metric("ROE", f"{ratios['roe']:.2f}%")
+                    if 'roa' in ratios:
+                        st.metric("ROA", f"{ratios['roa']:.2f}%")
+                
+                with col_r2:
+                    st.markdown("**💧 LIQUIDITÉ**")
+                    if 'ratio_liquidite_generale' in ratios:
+                        st.metric("Ratio de Liquidité Générale", f"{ratios['ratio_liquidite_generale']:.2f}")
+                    if 'ratio_liquidite_immediate' in ratios:
+                        st.metric("Ratio de Liquidité Immédiate", f"{ratios['ratio_liquidite_immediate']:.2f}")
+                    
+                    st.markdown("**💳 ENDETTEMENT**")
+                    if 'ratio_endettement' in ratios:
+                        st.metric("Ratio d'Endettement", f"{ratios['ratio_endettement']:.2f}%")
+                    if 'taux_endettement' in ratios:
+                        st.metric("Taux d'Endettement", f"{ratios['taux_endettement']:.2f}%")
+                
+                with col_r3:
+                    st.markdown("**⚡ EFFICACITÉ**")
+                    if 'rotation_actifs' in ratios:
+                        st.metric("Rotation des Actifs", f"{ratios['rotation_actifs']:.2f}")
+                    if 'rotation_stocks' in ratios:
+                        st.metric("Rotation des Stocks", f"{ratios['rotation_stocks']:.2f}")
+                    
+                    st.markdown("**📊 MARCHÉ**")
+                    if 'per' in ratios:
+                        st.metric("PER", f"{ratios['per']:.2f}")
+                    if 'price_to_book' in ratios:
+                        st.metric("Price to Book", f"{ratios['price_to_book']:.2f}")
+                
+                # Interprétation des ratios
+                st.markdown("---")
+                st.markdown("### 💡 Interprétation Automatique")
+                
+                interpretations = []
+                
+                if 'roe' in ratios:
+                    if ratios['roe'] > 15:
+                        interpretations.append("✅ ROE excellent (>15%) - Entreprise très rentable pour les actionnaires")
+                    elif ratios['roe'] > 10:
+                        interpretations.append("👍 ROE bon (10-15%) - Rentabilité correcte")
+                    else:
+                        interpretations.append("⚠️ ROE faible (<10%) - Rentabilité à améliorer")
+                
+                if 'ratio_liquidite_generale' in ratios:
+                    if ratios['ratio_liquidite_generale'] > 2:
+                        interpretations.append("✅ Excellente liquidité (>2) - Capacité élevée à honorer les dettes court terme")
+                    elif ratios['ratio_liquidite_generale'] > 1:
+                        interpretations.append("👍 Bonne liquidité (1-2) - Capacité correcte")
+                    else:
+                        interpretations.append("⚠️ Liquidité faible (<1) - Risque de solvabilité")
+                
+                if 'ratio_endettement' in ratios:
+                    if ratios['ratio_endettement'] < 50:
+                        interpretations.append("✅ Faible endettement (<50%) - Structure financière saine")
+                    elif ratios['ratio_endettement'] < 100:
+                        interpretations.append("👍 Endettement modéré (50-100%) - Structure acceptable")
+                    else:
+                        interpretations.append("⚠️ Fort endettement (>100%) - Risque financier élevé")
+                
+                for interp in interpretations:
+                    st.info(interp)
+            else:
+                st.warning("Remplissez les données financières pour voir les ratios calculés")
+        
+        # Bouton de sauvegarde global
+        st.markdown("---")
+        col_save1, col_save2 = st.columns([1, 1])
+        
+        with col_save1:
+            if st.button("💾 Sauvegarder les Données", type="primary", use_container_width=True):
+                st.session_state.financial_data[data_key] = {
+                    'symbole': symbole,
+                    'annee': annee,
+                    'bilan': bilan_data,
+                    'compte_resultat': compte_resultat_data,
+                    'flux_tresorerie': flux_tresorerie_data,
+                    'ratios': ratios,
+                    'last_update': datetime.now().isoformat()
+                }
+                st.success(f"✅ Données sauvegardées pour {symbole} - {annee}")
+                st.rerun()
+        
+        with col_save2:
+            if st.button("🗑️ Supprimer ces Données", use_container_width=True):
+                if data_key in st.session_state.financial_data:
+                    del st.session_state.financial_data[data_key]
+                    st.success("Données supprimées")
+                    st.rerun()
+        
+        # Afficher toutes les données sauvegardées
+        st.markdown("---")
+        st.subheader("📚 Données Financières Sauvegardées")
+        
+        if st.session_state.financial_data:
+            saved_data = []
+            for key, data in st.session_state.financial_data.items():
+                if isinstance(data, dict):
+                    saved_data.append({
+                        'Symbole': data.get('symbole', 'N/A'),
+                        'Année': data.get('annee', 'N/A'),
+                        'Dernière MAJ': data.get('last_update', 'N/A')[:19] if data.get('last_update') else 'N/A'
+                    })
+            
+            if saved_data:
+                df_saved = pd.DataFrame(saved_data)
+                st.dataframe(df_saved, use_container_width=True)
+        else:
+            st.info("Aucune donnée financière sauvegardée pour le moment")
+
+# ===========================
+# FONCTIONS DE SCRAPING BRVM
+# ===========================
+
+@st.cache_data(ttl=300)
 def scrape_brvm_data():
-    """
-    Fonction pour scraper les données du site BRVM
-    basée sur la structure HTML observée
-    """
+    """Fonction pour scraper les données du site BRVM"""
     url = "https://www.brvm.org/fr/cours-actions/0"
     
     try:
-        # Headers pour simuler un navigateur
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
         }
         
-        # Désactiver la vérification SSL pour Streamlit Cloud
         response = requests.get(url, headers=headers, timeout=15, verify=False)
         
         if response.status_code != 200:
-            st.error(f"Erreur HTTP {response.status_code}")
             return None
         
-        # Parser le HTML
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # DEBUG: Afficher la structure pour comprendre
-        with st.expander("🔍 Voir la structure HTML (débogage)"):
-            st.code(str(soup)[:5000], language='html')
-        
-        # Recherche du tableau principal
-        # Méthode 1: Chercher par les en-têtes spécifiques
         table = None
         for t in soup.find_all('table'):
-            # Vérifier si ce tableau contient les bonnes colonnes
-            headers = [th.get_text(strip=True) for th in t.find_all('th')]
-            if 'Symbole' in headers and 'Nom' in headers:
+            headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
+            if 'Symbole' in headers_list and 'Nom' in headers_list:
                 table = t
                 break
         
-        # Méthode 2: Prendre le premier tableau si la méthode 1 échoue
         if not table:
             tables = soup.find_all('table')
             if tables:
-                table = tables[0]  # Prendre le premier tableau
-                st.warning("Utilisation du premier tableau trouvé (structure différente)")
+                table = tables[0]
         
         if not table:
-            st.error("Aucun tableau trouvé sur la page")
             return None
         
-        # Extraction des en-têtes
-        headers = []
-        for th in table.find_all('th'):
-            headers.append(th.get_text(strip=True))
+        headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
         
-        # Si pas d'en-têtes, utiliser les en-têtes par défaut
-        if not headers:
-            headers = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+        if not headers_list:
+            headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
                       'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
         
-        # Extraction des données
         data = []
         for row in table.find_all('tr'):
             cells = row.find_all(['td', 'th'])
-            if cells and cells[0].name == 'td':  # Ignorer la ligne d'en-tête
+            if cells and cells[0].name == 'td':
                 row_data = [cell.get_text(strip=True) for cell in cells]
                 
-                # Vérifier que la ligne a le bon nombre de colonnes
-                if len(row_data) >= 6:  # Au moins les colonnes principales
-                    # Compléter si moins de colonnes que d'en-têtes
-                    if len(row_data) < len(headers):
-                        row_data.extend([''] * (len(headers) - len(row_data)))
-                    elif len(row_data) > len(headers):
-                        row_data = row_data[:len(headers)]
+                if len(row_data) >= 6:
+                    if len(row_data) < len(headers_list):
+                        row_data.extend([''] * (len(headers_list) - len(row_data)))
+                    elif len(row_data) > len(headers_list):
+                        row_data = row_data[:len(headers_list)]
                     
                     data.append(row_data)
         
         if not data:
-            st.error("Aucune donnée extraite du tableau")
             return None
         
-        # Création du DataFrame
-        df = pd.DataFrame(data, columns=headers)
-        
-        # Nettoyage des données
+        df = pd.DataFrame(data, columns=headers_list)
         df_clean = clean_dataframe(df)
         
         return df_clean
         
     except Exception as e:
-        st.error(f"Erreur lors du scraping : {str(e)}")
         return None
 
 def clean_dataframe(df):
     """Nettoyer et formater le DataFrame"""
     df = df.copy()
-    
-    # Nettoyer les noms de colonnes
     df.columns = [col.strip() for col in df.columns]
     
-    # Colonnes à convertir en numérique
     numeric_columns = []
     for col in df.columns:
         if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation']):
             numeric_columns.append(col)
     
-    # Conversion des valeurs numériques
     for col in numeric_columns:
         if col in df.columns:
-            # Remplacer les virgules par des points pour les décimales
             df[col] = df[col].astype(str).str.replace(',', '.')
-            # Supprimer les espaces dans les nombres
             df[col] = df[col].str.replace(' ', '')
-            # Supprimer les % pour la colonne Variation
             if 'Variation' in col:
                 df[col] = df[col].str.replace('%', '')
-            # Convertir en numérique
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Trier par Symbole
     if 'Symbole' in df.columns:
         df = df.sort_values('Symbole').reset_index(drop=True)
     
     return df
 
 def display_brvm_data():
-    """Afficher les données BRVM avec interface utilisateur"""
+    """Afficher les données BRVM avec analyse fondamentale"""
     
     st.sidebar.header("⚙️ Paramètres")
     
-    # Bouton d'actualisation
     if st.sidebar.button("🔄 Actualiser les données"):
         st.cache_data.clear()
         st.rerun()
     
-    # Options d'affichage
-    show_raw = st.sidebar.checkbox("Afficher les données brutes", False)
-    sort_by = st.sidebar.selectbox(
-        "Trier par",
-        ["Symbole", "Variation (%)", "Volume", "Cours Clôture (FCFA)"]
-    )
-    
-    # Récupération des données
     with st.spinner("Récupération des données BRVM..."):
         df = scrape_brvm_data()
     
     if df is not None:
-        # Statistiques rapides
         st.subheader("📈 Statistiques du marché")
         
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            total = len(df)
-            st.metric("Nombre de titres", total)
+            st.metric("Nombre de titres", len(df))
         
         with col2:
             if 'Variation (%)' in df.columns:
@@ -183,19 +516,8 @@ def display_brvm_data():
                 stable = len(df[df['Variation (%)'] == 0])
                 st.metric("Stables", stable)
         
-        # Tri des données
-        if sort_by in df.columns:
-            if sort_by == 'Variation (%)':
-                df_display = df.sort_values(sort_by, ascending=False)
-            else:
-                df_display = df.sort_values(sort_by)
-        else:
-            df_display = df
+        st.subheader("📋 Cours des Actions")
         
-        # Affichage du tableau
-        st.subheader("📋 Données des actions")
-        
-        # Mise en forme des variations
         def color_variation(val):
             if isinstance(val, (int, float)):
                 if val > 0:
@@ -204,92 +526,168 @@ def display_brvm_data():
                     return 'color: red; font-weight: bold'
             return ''
         
-        # Appliquer le style si la colonne existe
-        if 'Variation (%)' in df_display.columns:
-            styled_df = df_display.style.map(color_variation, subset=['Variation (%)'])
+        if 'Variation (%)' in df.columns:
+            styled_df = df.style.map(color_variation, subset=['Variation (%)'])
             st.dataframe(styled_df, use_container_width=True, height=400)
         else:
-            st.dataframe(df_display, use_container_width=True, height=400)
+            st.dataframe(df, use_container_width=True, height=400)
         
-        # Données brutes pour débogage
-        if show_raw:
-            st.subheader("📄 Données brutes extraites")
-            st.write("Structure du DataFrame :", df.shape)
-            st.write(df)
+        # Section Analyse Fondamentale
+        st.markdown("---")
+        st.subheader("📊 Analyse Fondamentale par Titre")
         
-        # Téléchargement
+        if 'Symbole' in df.columns:
+            symboles_list = [''] + df['Symbole'].dropna().unique().tolist()
+            symbole_selected = st.selectbox("Sélectionnez un titre pour voir son analyse fondamentale", symboles_list)
+            
+            if symbole_selected:
+                init_storage()
+                
+                financial_records = []
+                for key, data in st.session_state.financial_data.items():
+                    if isinstance(data, dict) and data.get('symbole') == symbole_selected:
+                        financial_records.append(data)
+                
+                if financial_records:
+                    # Trier par année
+                    financial_records = sorted(financial_records, key=lambda x: x.get('annee', 0), reverse=True)
+                    
+                    st.success(f"✅ {len(financial_records)} année(s) de données disponibles pour {symbole_selected}")
+                    
+                    # Afficher chaque année
+                    for record in financial_records:
+                        annee = record.get('annee', 'N/A')
+                        
+                        with st.expander(f"📅 Année {annee} - Dernière MAJ: {record.get('last_update', 'N/A')[:19] if record.get('last_update') else 'N/A'}"):
+                            
+                            tab_a, tab_b, tab_c, tab_d = st.tabs(["Bilan", "Compte de Résultat", "Flux de Trésorerie", "Ratios"])
+                            
+                            with tab_a:
+                                bilan = record.get('bilan', {})
+                                if bilan:
+                                    col1, col2 = st.columns(2)
+                                    
+                                    with col1:
+                                        st.markdown("**ACTIF**")
+                                        st.write(f"Actif Immobilisé: {bilan.get('actif_immobilise', 0):,.0f} FCFA")
+                                        st.write(f"Actif Courant: {bilan.get('actif_courant', 0):,.0f} FCFA")
+                                        st.write(f"Stocks: {bilan.get('stocks', 0):,.0f} FCFA")
+                                        st.write(f"Créances: {bilan.get('creances', 0):,.0f} FCFA")
+                                        st.write(f"Trésorerie: {bilan.get('tresorerie', 0):,.0f} FCFA")
+                                        st.metric("**Total Actif**", f"{bilan.get('actif_total', 0):,.0f} FCFA")
+                                    
+                                    with col2:
+                                        st.markdown("**PASSIF**")
+                                        st.write(f"Capitaux Propres: {bilan.get('capitaux_propres', 0):,.0f} FCFA")
+                                        st.write(f"Dettes Long Terme: {bilan.get('dettes_long_terme', 0):,.0f} FCFA")
+                                        st.write(f"Passif Courant: {bilan.get('passif_courant', 0):,.0f} FCFA")
+                                        st.metric("**Total Passif**", f"{bilan.get('passif_total', 0):,.0f} FCFA")
+                                else:
+                                    st.info("Aucune donnée de bilan")
+                            
+                            with tab_b:
+                                cr = record.get('compte_resultat', {})
+                                if cr:
+                                    st.write(f"Chiffre d'Affaires: **{cr.get('chiffre_affaires', 0):,.0f} FCFA**")
+                                    st.write(f"Charges d'Exploitation: {cr.get('charges_exploitation', 0):,.0f} FCFA")
+                                    st.write(f"Résultat d'Exploitation: {cr.get('resultat_exploitation', 0):,.0f} FCFA")
+                                    st.write(f"Charges Financières: {cr.get('charges_financieres', 0):,.0f} FCFA")
+                                    st.write(f"Produits Financiers: {cr.get('produits_financiers', 0):,.0f} FCFA")
+                                    st.write(f"Impôts: {cr.get('impots', 0):,.0f} FCFA")
+                                    st.metric("**Résultat Net**", f"{cr.get('resultat_net', 0):,.0f} FCFA")
+                                    if cr.get('benefice_par_action', 0) > 0:
+                                        st.metric("BPA", f"{cr.get('benefice_par_action', 0):,.2f} FCFA")
+                                else:
+                                    st.info("Aucune donnée de compte de résultat")
+                            
+                            with tab_c:
+                                ft = record.get('flux_tresorerie', {})
+                                if ft:
+                                    st.write(f"Flux d'Exploitation: {ft.get('flux_exploitation', 0):,.0f} FCFA")
+                                    st.write(f"Flux d'Investissement: {ft.get('flux_investissement', 0):,.0f} FCFA")
+                                    st.write(f"Flux de Financement: {ft.get('flux_financement', 0):,.0f} FCFA")
+                                    st.metric("**Variation Trésorerie**", f"{ft.get('variation_tresorerie', 0):,.0f} FCFA")
+                                else:
+                                    st.info("Aucune donnée de flux de trésorerie")
+                            
+                            with tab_d:
+                                ratios = record.get('ratios', {})
+                                if ratios:
+                                    col1, col2, col3 = st.columns(3)
+                                    
+                                    with col1:
+                                        st.markdown("**Rentabilité**")
+                                        if 'marge_nette' in ratios:
+                                            st.metric("Marge Nette", f"{ratios['marge_nette']:.2f}%")
+                                        if 'roe' in ratios:
+                                            st.metric("ROE", f"{ratios['roe']:.2f}%")
+                                        if 'roa' in ratios:
+                                            st.metric("ROA", f"{ratios['roa']:.2f}%")
+                                    
+                                    with col2:
+                                        st.markdown("**Liquidité**")
+                                        if 'ratio_liquidite_generale' in ratios:
+                                            st.metric("Liquidité Générale", f"{ratios['ratio_liquidite_generale']:.2f}")
+                                        if 'ratio_endettement' in ratios:
+                                            st.metric("Endettement", f"{ratios['ratio_endettement']:.2f}%")
+                                    
+                                    with col3:
+                                        st.markdown("**Marché**")
+                                        if 'per' in ratios:
+                                            st.metric("PER", f"{ratios['per']:.2f}")
+                                        if 'price_to_book' in ratios:
+                                            st.metric("P/B", f"{ratios['price_to_book']:.2f}")
+                                else:
+                                    st.info("Aucun ratio calculé")
+                else:
+                    st.warning(f"⚠️ Aucune donnée financière disponible pour {symbole_selected}")
+                    st.info("💡 Le développeur doit ajouter les données via la section développeur")
+        
+        # Export CSV
+        st.markdown("---")
         st.subheader("💾 Export des données")
-        
         csv = df.to_csv(index=False, sep=';', decimal=',')
         st.download_button(
-            label="📥 Télécharger en CSV",
+            label="📥 Télécharger les cours en CSV",
             data=csv,
-            file_name="brvm_data.csv",
+            file_name="brvm_cours.csv",
             mime="text/csv"
         )
-        
-        # Informations sur les colonnes
-        with st.expander("ℹ️ Informations sur les colonnes"):
-            st.markdown("""
-            - **Symbole** : Code de l'action
-            - **Nom** : Nom de l'entreprise
-            - **Volume** : Nombre d'actions échangées
-            - **Cours veille** : Cours de la veille (FCFA)
-            - **Cours Ouverture** : Cours à l'ouverture (FCFA)
-            - **Cours Clôture** : Cours à la clôture (FCFA)
-            - **Variation (%)** : Pourcentage de variation
-            """)
     
     else:
-        # Mode démo avec données statiques
-        st.warning("⚠️ Mode démonstration - Données statiques")
-        
-        # Données d'exemple basées sur le HTML fourni
-        demo_data = {
-            'Symbole': ['BICB', 'BICC', 'BOAB', 'ORAC', 'SGBC', 'SNTS'],
-            'Nom': ['BANQUE INTERNATIONALE POUR L\'INDUSTRIE ET LE COMMERCE DU BENIN',
-                   'BICI COTE D\'IVOIRE', 'BANK OF AFRICA BENIN', 
-                   'ORANGE COTE D\'IVOIRE', 'SOCIETE GENERALE COTE D\'IVOIRE',
-                   'SONATEL SENEGAL'],
-            'Volume': [900, 1025, 4599, 342, 282, 3047],
-            'Cours veille (FCFA)': [4950, 19000, 5930, 14500, 28550, 25000],
-            'Cours Clôture (FCFA)': [4905, 19380, 5825, 14600, 28500, 24900],
-            'Variation (%)': [-0.91, 0.21, 0.43, 0.69, 2.52, -0.40]
-        }
-        
-        df_demo = pd.DataFrame(demo_data)
-        st.dataframe(df_demo, use_container_width=True)
-        
-        st.info("""
-        **Note** : L'application n'a pas pu se connecter au site BRVM.
-        Les données affichées sont à titre d'exemple.
-        
-        Prochaines étapes :
-        1. Vérifiez que le site https://www.brvm.org est accessible
-        2. La structure HTML peut avoir changé
-        3. Contactez le support si le problème persiste
-        """)
+        st.warning("⚠️ Impossible de récupérer les données BRVM")
+        st.info("Vérifiez votre connexion internet ou réessayez plus tard")
 
-# Interface principale
+# ===========================
+# INTERFACE PRINCIPALE
+# ===========================
+
 def main():
-    st.markdown("""
-    ### Application d'analyse des actions BRVM
+    st.title("📊 Analyse des titres BRVM")
     
-    Cette application extrait les données boursières de la Bourse Régionale des Valeurs Mobilières (BRVM).
+    # Menu de navigation
+    page = st.sidebar.radio(
+        "Navigation",
+        ["🏠 Accueil & Cours", "🔐 Section Développeur"]
+    )
     
-    **Fonctionnalités** :
-    - Extraction en temps réel des cours des actions
-    - Affichage des variations
-    - Filtrage et tri des données
-    - Export au format CSV
-    """)
+    if page == "🏠 Accueil & Cours":
+        st.markdown("""
+        ### Application d'analyse BRVM
+        
+        Cette application vous permet de :
+        - 📈 Consulter les cours en temps réel
+        - 📊 Analyser les données fondamentales des sociétés cotées
+        - 💹 Suivre les variations et performances
+        """)
+        
+        display_brvm_data()
+        
+        st.markdown("---")
+        st.caption("Source : BRVM - https://www.brvm.org | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
     
-    # Affichage des données
-    display_brvm_data()
-    
-    # Footer
-    st.markdown("---")
-    st.caption("Source : BRVM - https://www.brvm.org | Dernière mise à jour : " + pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"))
+    elif page == "🔐 Section Développeur":
+        developer_section()
 
 if __name__ == "__main__":
     main()
