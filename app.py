@@ -468,7 +468,6 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=5
         'projections': projections,
         'methode': '40% TCAM + 60% Régression Linéaire'
     }
-
 # ===========================
 # FONCTIONS DE SCRAPING BRVM
 # ===========================
