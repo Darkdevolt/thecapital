@@ -482,9 +482,13 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # FONCTIONS DE SCRAPING BRVM
 # ===========================
 
+# ===========================
+# FONCTIONS DE SCRAPING BRVM CORRIGÉES
+# ===========================
+
 @st.cache_data(ttl=300)
 def scrape_brvm_data():
-    """Fonction pour scraper les données du site BRVM (toutes les pages sectorielles)"""
+    """Fonction corrigée pour scraper les données du site BRVM avec la nouvelle structure"""
     
     # URLs des différentes pages sectorielles BRVM
     sectors = [
@@ -505,52 +509,80 @@ def scrape_brvm_data():
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
             }
             
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
+            # Désactiver la vérification SSL
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            
+            response = requests.get(url, headers=headers, timeout=30, verify=False)
             
             if response.status_code != 200:
-                st.warning(f"⚠️ Impossible d'accéder à {secteur}")
+                st.warning(f"⚠️ Impossible d'accéder à {secteur} (statut: {response.status_code})")
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Rechercher le tableau principal
+            # Méthode 1: Chercher le tableau par son contenu
             table = None
-            for t in soup.find_all('table'):
-                headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
-                if 'Symbole' in headers_list and 'Nom' in headers_list:
+            
+            # Essayer de trouver le tableau avec le bon en-tête
+            tables = soup.find_all('table')
+            
+            for t in tables:
+                # Vérifier si le tableau contient les mots-clés attendus
+                table_text = t.get_text()
+                if any(keyword in table_text for keyword in ['Symbol', 'Nom', 'Volume', 'Cours']):
                     table = t
                     break
             
+            # Méthode 2: Si pas trouvé, prendre le premier tableau avec des données
             if not table:
-                # Si pas de tableau avec th, prendre le premier tableau
-                tables = soup.find_all('table')
-                if tables:
-                    table = tables[0]
+                for t in tables:
+                    if len(t.find_all('tr')) > 2:  # Au moins une ligne de données
+                        table = t
+                        break
             
             if not table:
                 continue
             
             # Extraire les en-têtes
-            headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
+            headers_list = []
+            header_row = table.find('tr')
+            if header_row:
+                headers_list = [th.get_text(strip=True) for th in header_row.find_all(['th', 'td'])]
             
-            if not headers_list:
+            # Si pas d'en-têtes, utiliser les en-têtes par défaut
+            if not headers_list or len(headers_list) < 3:
                 headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
                               'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
             
             # Extraire les données
             data = []
-            for row in table.find_all('tr'):
+            rows = table.find_all('tr')
+            
+            for row in rows[1:]:  # Skip header row
                 cells = row.find_all(['td', 'th'])
-                if cells and cells[0].name == 'td':
+                if cells:
                     row_data = [cell.get_text(strip=True) for cell in cells]
                     
-                    if len(row_data) >= 6:
-                        if len(row_data) < len(headers_list):
-                            row_data.extend([''] * (len(headers_list) - len(row_data)))
-                        elif len(row_data) > len(headers_list):
+                    # Filtrer les lignes vides ou non pertinentes
+                    if len(row_data) >= 3 and row_data[0]:  # Au moins symbole et nom
+                        
+                        # Ajuster la longueur des données aux en-têtes
+                        if len(row_data) > len(headers_list):
                             row_data = row_data[:len(headers_list)]
+                        elif len(row_data) < len(headers_list):
+                            row_data.extend([''] * (len(headers_list) - len(row_data)))
                         
                         # Ajouter le secteur
                         row_data.append(secteur)
@@ -560,7 +592,15 @@ def scrape_brvm_data():
                 # Créer un DataFrame pour ce secteur
                 df_sector = pd.DataFrame(data, columns=headers_list + ['Secteur'])
                 df_sector = clean_dataframe(df_sector)
-                all_data.append(df_sector)
+                
+                # Vérifier que nous avons les bonnes colonnes
+                if 'Symbole' in df_sector.columns and len(df_sector) > 0:
+                    all_data.append(df_sector)
+                    st.success(f"✅ {secteur}: {len(df_sector)} titres trouvés")
+                else:
+                    st.warning(f"⚠️ {secteur}: Format de données non reconnu")
+            else:
+                st.warning(f"⚠️ Aucune donnée trouvée pour {secteur}")
                 
         except Exception as e:
             st.warning(f"❌ Erreur lors du scraping de {secteur}: {str(e)}")
@@ -568,35 +608,62 @@ def scrape_brvm_data():
     
     if all_data:
         # Fusionner tous les DataFrames
-        df_combined = pd.concat(all_data, ignore_index=True)
-        
-        # Supprimer les doublons (en gardant la première occurrence)
-        if 'Symbole' in df_combined.columns:
-            df_combined = df_combined.drop_duplicates(subset='Symbole', keep='first')
-        
-        return df_combined
+        try:
+            df_combined = pd.concat(all_data, ignore_index=True)
+            
+            # Supprimer les doublons (en gardant la première occurrence)
+            if 'Symbole' in df_combined.columns:
+                df_combined = df_combined.drop_duplicates(subset='Symbole', keep='first')
+            
+            # Vérifier et renommer les colonnes si nécessaire
+            column_mapping = {
+                'Symbol': 'Symbole',
+                'symbol': 'Symbole',
+                'Nom de la société': 'Nom',
+                'Cours de clôture': 'Cours Clôture (FCFA)',
+                'Cours de cloture': 'Cours Clôture (FCFA)',
+                'Clôture': 'Cours Clôture (FCFA)',
+                'Variation': 'Variation (%)',
+                'Var %': 'Variation (%)',
+                'Var. %': 'Variation (%)'
+            }
+            
+            df_combined.columns = [column_mapping.get(col, col) for col in df_combined.columns]
+            
+            st.info(f"📊 Données combinées: {len(df_combined)} titres uniques")
+            
+            return df_combined
+        except Exception as e:
+            st.error(f"Erreur lors de la fusion des données: {str(e)}")
+            return None
     else:
         st.error("❌ Aucune donnée n'a pu être récupérée")
         return None
 
 def clean_dataframe(df):
-    """Nettoyer et formater le DataFrame"""
+    """Nettoyer et formater le DataFrame avec la nouvelle structure"""
     df = df.copy()
+    
     if df.empty:
         return df
     
+    # Nettoyer les noms de colonnes
     df.columns = [col.strip() for col in df.columns]
     
     # Identifier les colonnes numériques
     numeric_columns = []
     for col in df.columns:
-        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation', 'Capitalisation']):
+        if any(keyword.lower() in col.lower() for keyword in ['Cours', 'Volume', 'Variation', 'Capitalisation', 'valeur']):
             numeric_columns.append(col)
     
     # Nettoyer les valeurs numériques
     for col in numeric_columns:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '.')
+            # Convertir en chaîne si ce n'est pas déjà le cas
+            df[col] = df[col].astype(str)
+            
+            # Supprimer les caractères non numériques (sauf . , -)
+            df[col] = df[col].str.replace(',', '.')
             df[col] = df[col].str.replace(' ', '')
             df[col] = df[col].str.replace('FCFA', '')
             df[col] = df[col].str.replace('F', '')
@@ -604,13 +671,24 @@ def clean_dataframe(df):
             df[col] = df[col].str.replace('%', '')
             df[col] = df[col].str.replace('€', '')
             df[col] = df[col].str.replace('$', '')
+            df[col] = df[col].str.replace('XOF', '')
+            
+            # Convertir en numérique
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
+    # Nettoyer les symboles
     if 'Symbole' in df.columns:
-        df = df.sort_values('Symbole').reset_index(drop=True)
+        df['Symbole'] = df['Symbole'].astype(str).str.strip().str.upper()
+    
+    # Nettoyer les noms
+    if 'Nom' in df.columns:
+        df['Nom'] = df['Nom'].astype(str).str.strip()
+    
+    # Supprimer les lignes vides
+    if 'Symbole' in df.columns:
+        df = df[df['Symbole'].notna() & (df['Symbole'] != '')]
     
     return df
-
 # ===========================
 # SECTION DÉVELOPPEUR
 # ===========================
