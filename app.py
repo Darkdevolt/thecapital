@@ -6,6 +6,8 @@ import warnings
 import json
 from datetime import datetime
 from supabase import create_client
+import numpy as np
+from sklearn.linear_model import LinearRegression
 warnings.filterwarnings('ignore')
 
 # Configuration
@@ -130,64 +132,342 @@ def init_storage():
 # FONCTIONS DE CALCUL DES RATIOS
 # ===========================
 
-def calculate_financial_ratios(bilan, compte_resultat, flux_tresorerie):
-    """Calculer automatiquement les ratios financiers"""
+def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie):
+    """Version améliorée avec tous les ratios standards"""
     ratios = {}
     
-    try:
-        # RATIOS DE RENTABILITÉ
-        if compte_resultat.get('resultat_net') and compte_resultat.get('chiffre_affaires'):
-            ratios['marge_nette'] = (compte_resultat['resultat_net'] / compte_resultat['chiffre_affaires']) * 100
-        
-        if compte_resultat.get('resultat_exploitation') and compte_resultat.get('chiffre_affaires'):
-            ratios['marge_exploitation'] = (compte_resultat['resultat_exploitation'] / compte_resultat['chiffre_affaires']) * 100
-        
-        if compte_resultat.get('resultat_net') and bilan.get('capitaux_propres'):
-            ratios['roe'] = (compte_resultat['resultat_net'] / bilan['capitaux_propres']) * 100
-        
-        if compte_resultat.get('resultat_net') and bilan.get('actif_total'):
-            ratios['roa'] = (compte_resultat['resultat_net'] / bilan['actif_total']) * 100
-        
-        # RATIOS DE LIQUIDITÉ
-        if bilan.get('actif_courant') and bilan.get('passif_courant'):
-            ratios['ratio_liquidite_generale'] = bilan['actif_courant'] / bilan['passif_courant']
-        
-        if bilan.get('tresorerie') and bilan.get('passif_courant'):
-            ratios['ratio_liquidite_immediate'] = bilan['tresorerie'] / bilan['passif_courant']
-        
-        # RATIOS D'ENDETTEMENT
-        if bilan.get('dettes_totales') and bilan.get('capitaux_propres'):
-            ratios['ratio_endettement'] = (bilan['dettes_totales'] / bilan['capitaux_propres']) * 100
-        
-        if bilan.get('dettes_totales') and bilan.get('actif_total'):
-            ratios['taux_endettement'] = (bilan['dettes_totales'] / bilan['actif_total']) * 100
-        
-        # RATIOS D'EFFICACITÉ
-        if compte_resultat.get('chiffre_affaires') and bilan.get('actif_total'):
-            ratios['rotation_actifs'] = compte_resultat['chiffre_affaires'] / bilan['actif_total']
-        
-        if compte_resultat.get('chiffre_affaires') and bilan.get('stocks') and bilan.get('stocks') > 0:
-            ratios['rotation_stocks'] = compte_resultat['chiffre_affaires'] / bilan['stocks']
-        
-        # RATIOS DE MARCHÉ
-        if bilan.get('cours_action') and compte_resultat.get('benefice_par_action') and compte_resultat.get('benefice_par_action') > 0:
-            ratios['per'] = bilan['cours_action'] / compte_resultat['benefice_par_action']
-        
-        if bilan.get('cours_action') and bilan.get('capitaux_propres_par_action') and bilan.get('capitaux_propres_par_action') > 0:
-            ratios['price_to_book'] = bilan['cours_action'] / bilan['capitaux_propres_par_action']
-        
-        # RATIOS DE FLUX DE TRÉSORERIE
-        if flux_tresorerie.get('flux_exploitation') and compte_resultat.get('resultat_net') and compte_resultat.get('resultat_net') != 0:
-            ratios['qualite_benefices'] = flux_tresorerie['flux_exploitation'] / compte_resultat['resultat_net']
-        
-        if flux_tresorerie.get('flux_exploitation') and bilan.get('passif_courant') and bilan.get('passif_courant') > 0:
-            ratios['couverture_dettes_courtes'] = flux_tresorerie['flux_exploitation'] / bilan['passif_courant']
-        
-    except Exception as e:
-        st.error(f"Erreur lors du calcul des ratios: {str(e)}")
+    # ========== CALCULS INTERMÉDIAIRES CRITIQUES ==========
+    
+    # EBITDA = Résultat d'exploitation + Amortissements
+    # Si tu n'as pas les amortissements séparés, utilise approximation
+    ebitda = compte_resultat.get('resultat_exploitation', 0)
+    if 'amortissements' in compte_resultat:
+        ebitda += compte_resultat['amortissements']
+    
+    # EBIT = Résultat d'exploitation
+    ebit = compte_resultat.get('resultat_exploitation', 0)
+    
+    # Free Cash Flow
+    fcf = flux_tresorerie.get('flux_exploitation', 0) + flux_tresorerie.get('flux_investissement', 0)
+    
+    # Working Capital (Fonds de roulement)
+    working_capital = bilan.get('actif_courant', 0) - bilan.get('passif_courant', 0)
+    
+    # Enterprise Value approximé
+    market_cap = bilan.get('cours_action', 0) * bilan.get('nb_actions', 0)
+    enterprise_value = market_cap + bilan.get('dettes_totales', 0) - bilan.get('tresorerie', 0)
+    
+    # ========== RATIOS DE RENTABILITÉ CORRIGÉS ==========
+    
+    if compte_resultat.get('resultat_net') and compte_resultat.get('chiffre_affaires'):
+        ratios['marge_nette'] = (compte_resultat['resultat_net'] / compte_resultat['chiffre_affaires']) * 100
+    
+    if ebit and compte_resultat.get('chiffre_affaires'):
+        ratios['marge_ebit'] = (ebit / compte_resultat['chiffre_affaires']) * 100
+    
+    if ebitda and compte_resultat.get('chiffre_affaires'):
+        ratios['marge_ebitda'] = (ebitda / compte_resultat['chiffre_affaires']) * 100
+    
+    if compte_resultat.get('resultat_net') and bilan.get('capitaux_propres'):
+        ratios['roe'] = (compte_resultat['resultat_net'] / bilan['capitaux_propres']) * 100
+    
+    if compte_resultat.get('resultat_net') and bilan.get('actif_total'):
+        ratios['roa'] = (compte_resultat['resultat_net'] / bilan['actif_total']) * 100
+    
+    if ebit and bilan.get('actif_total'):
+        ratios['roic'] = (ebit * 0.75 / (bilan['actif_total'] - bilan.get('passif_courant', 0))) * 100  # Après impôt 25%
+    
+    # ========== RATIOS DE LIQUIDITÉ CORRIGÉS ==========
+    
+    if bilan.get('actif_courant') and bilan.get('passif_courant') and bilan.get('passif_courant') > 0:
+        ratios['ratio_liquidite_generale'] = bilan['actif_courant'] / bilan['passif_courant']
+    
+    # Ratio de liquidité réduite (quick ratio) : exclut les stocks
+    if bilan.get('actif_courant') and bilan.get('stocks') is not None and bilan.get('passif_courant'):
+        actif_liquide = bilan['actif_courant'] - bilan.get('stocks', 0)
+        if bilan['passif_courant'] > 0:
+            ratios['ratio_liquidite_reduite'] = actif_liquide / bilan['passif_courant']
+    
+    if bilan.get('tresorerie') and bilan.get('passif_courant') and bilan.get('passif_courant') > 0:
+        ratios['ratio_liquidite_immediate'] = bilan['tresorerie'] / bilan['passif_courant']
+    
+    # ========== RATIOS D'ENDETTEMENT CORRIGÉS ==========
+    
+    if bilan.get('dettes_totales') and bilan.get('capitaux_propres') and bilan.get('capitaux_propres') > 0:
+        ratios['ratio_endettement'] = (bilan['dettes_totales'] / bilan['capitaux_propres']) * 100
+    
+    if bilan.get('dettes_totales') and bilan.get('actif_total') and bilan.get('actif_total') > 0:
+        ratios['taux_endettement'] = (bilan['dettes_totales'] / bilan['actif_total']) * 100
+    
+    # Solvabilité
+    if bilan.get('capitaux_propres') and bilan.get('actif_total') and bilan.get('actif_total') > 0:
+        ratios['ratio_solvabilite'] = (bilan['capitaux_propres'] / bilan['actif_total']) * 100
+    
+    # Debt to EBITDA (crucial pour évaluer capacité de remboursement)
+    if bilan.get('dettes_totales') and ebitda > 0:
+        ratios['debt_to_ebitda'] = bilan['dettes_totales'] / ebitda
+    
+    # Couverture des intérêts
+    if ebit and compte_resultat.get('charges_financieres') and compte_resultat.get('charges_financieres') > 0:
+        ratios['couverture_interets'] = ebit / compte_resultat['charges_financieres']
+    
+    # ========== RATIOS D'EFFICACITÉ ==========
+    
+    if compte_resultat.get('chiffre_affaires') and bilan.get('actif_total') and bilan.get('actif_total') > 0:
+        ratios['rotation_actifs'] = compte_resultat['chiffre_affaires'] / bilan['actif_total']
+    
+    if compte_resultat.get('chiffre_affaires') and bilan.get('stocks') and bilan.get('stocks') > 0:
+        ratios['rotation_stocks'] = compte_resultat['chiffre_affaires'] / bilan['stocks']
+    
+    # Délai de recouvrement (en jours)
+    if compte_resultat.get('chiffre_affaires') and bilan.get('creances') and compte_resultat.get('chiffre_affaires') > 0:
+        ratios['delai_recouvrement'] = (bilan['creances'] / compte_resultat['chiffre_affaires']) * 365
+    
+    # ========== RATIOS DE MARCHÉ ==========
+    
+    if bilan.get('cours_action') and compte_resultat.get('benefice_par_action') and compte_resultat.get('benefice_par_action') > 0:
+        ratios['per'] = bilan['cours_action'] / compte_resultat['benefice_par_action']
+    
+    if bilan.get('cours_action') and bilan.get('capitaux_propres_par_action') and bilan.get('capitaux_propres_par_action') > 0:
+        ratios['price_to_book'] = bilan['cours_action'] / bilan['capitaux_propres_par_action']
+    
+    # EV/EBITDA (multiple de valorisation clé)
+    if enterprise_value and ebitda > 0:
+        ratios['ev_ebitda'] = enterprise_value / ebitda
+    
+    # EV/Sales
+    if enterprise_value and compte_resultat.get('chiffre_affaires') and compte_resultat.get('chiffre_affaires') > 0:
+        ratios['ev_sales'] = enterprise_value / compte_resultat['chiffre_affaires']
+    
+    # Dividend Yield
+    if compte_resultat.get('dividende_par_action') and bilan.get('cours_action') and bilan.get('cours_action') > 0:
+        ratios['dividend_yield'] = (compte_resultat['dividende_par_action'] / bilan['cours_action']) * 100
+    
+    # ========== RATIOS DE FLUX DE TRÉSORERIE ==========
+    
+    if flux_tresorerie.get('flux_exploitation') and compte_resultat.get('resultat_net') and compte_resultat.get('resultat_net') != 0:
+        ratios['qualite_benefices'] = flux_tresorerie['flux_exploitation'] / compte_resultat['resultat_net']
+    
+    if fcf and market_cap > 0:
+        ratios['fcf_yield'] = (fcf / market_cap) * 100
+    
+    # Ratio de couverture des dettes par FCF
+    if fcf and bilan.get('dettes_totales') and bilan.get('dettes_totales') > 0:
+        ratios['fcf_to_debt'] = fcf / bilan['dettes_totales']
+    
+    # ========== DONNÉES INTERMÉDIAIRES UTILES ==========
+    ratios['ebitda'] = ebitda
+    ratios['ebit'] = ebit
+    ratios['fcf'] = fcf
+    ratios['working_capital'] = working_capital
+    ratios['enterprise_value'] = enterprise_value
+    ratios['market_cap'] = market_cap
     
     return ratios
 
+
+def calculate_valuation_multiples(symbole, annee, ratios_entreprise, df_brvm, financial_data):
+    """
+    Valorisation par multiples avec comparaison sectorielle (MÉDIANE)
+    """
+    
+    # Récupérer toutes les entreprises du même secteur
+    secteur_multiples = {
+        'per': [],
+        'price_to_book': [],
+        'ev_ebitda': [],
+        'ev_sales': []
+    }
+    
+    # Parcourir toutes les données financières
+    for key, data in financial_data.items():
+        if key == f"{symbole}_{annee}":
+            continue  # Exclure l'entreprise elle-même
+        
+        ratios = data.get('ratios', {})
+        
+        # Collecter les multiples valides
+        if ratios.get('per') and 0 < ratios['per'] < 100:  # Filtrer valeurs aberrantes
+            secteur_multiples['per'].append(ratios['per'])
+        
+        if ratios.get('price_to_book') and 0 < ratios['price_to_book'] < 20:
+            secteur_multiples['price_to_book'].append(ratios['price_to_book'])
+        
+        if ratios.get('ev_ebitda') and 0 < ratios['ev_ebitda'] < 50:
+            secteur_multiples['ev_ebitda'].append(ratios['ev_ebitda'])
+        
+        if ratios.get('ev_sales') and 0 < ratios['ev_sales'] < 10:
+            secteur_multiples['ev_sales'].append(ratios['ev_sales'])
+    
+    # Calculer les MÉDIANES (plus robuste que moyenne)
+    import numpy as np
+    
+    medianes = {}
+    for key, values in secteur_multiples.items():
+        if len(values) >= 3:  # Minimum 3 comparables
+            medianes[f"{key}_median"] = np.median(values)
+    
+    # VALORISATIONS BASÉES SUR LES MÉDIANES
+    valorisations = {}
+    
+    # 1. Valorisation par P/E médian
+    if 'per_median' in medianes and ratios_entreprise.get('benefice_par_action'):
+        juste_valeur_per = medianes['per_median'] * ratios_entreprise['benefice_par_action']
+        valorisations['juste_valeur_per'] = juste_valeur_per
+        
+        cours_actuel = ratios_entreprise.get('cours_action', 0)
+        if cours_actuel > 0:
+            valorisations['ecart_per'] = ((juste_valeur_per - cours_actuel) / cours_actuel) * 100
+    
+    # 2. Valorisation par P/B médian
+    if 'price_to_book_median' in medianes and ratios_entreprise.get('capitaux_propres_par_action'):
+        juste_valeur_pb = medianes['price_to_book_median'] * ratios_entreprise['capitaux_propres_par_action']
+        valorisations['juste_valeur_pb'] = juste_valeur_pb
+        
+        cours_actuel = ratios_entreprise.get('cours_action', 0)
+        if cours_actuel > 0:
+            valorisations['ecart_pb'] = ((juste_valeur_pb - cours_actuel) / cours_actuel) * 100
+    
+    # 3. Valorisation par EV/EBITDA médian
+    if 'ev_ebitda_median' in medianes and ratios_entreprise.get('ebitda'):
+        enterprise_value_juste = medianes['ev_ebitda_median'] * ratios_entreprise['ebitda']
+        
+        # Convertir EV en valeur des capitaux propres
+        dettes = ratios_entreprise.get('dettes_totales', 0)
+        tresorerie = ratios_entreprise.get('tresorerie', 0)
+        juste_valeur_ev = enterprise_value_juste - dettes + tresorerie
+        
+        nb_actions = ratios_entreprise.get('nb_actions', 0)
+        if nb_actions > 0:
+            juste_valeur_ev_par_action = juste_valeur_ev / nb_actions
+            valorisations['juste_valeur_ev_ebitda'] = juste_valeur_ev_par_action
+            
+            cours_actuel = ratios_entreprise.get('cours_action', 0)
+            if cours_actuel > 0:
+                valorisations['ecart_ev_ebitda'] = ((juste_valeur_ev_par_action - cours_actuel) / cours_actuel) * 100
+    
+    # DÉCISION D'INVESTISSEMENT
+    valorisations['medianes_secteur'] = medianes
+    
+    # Calculer potentiel moyen (moyenne des écarts)
+    ecarts = [v for k, v in valorisations.items() if k.startswith('ecart_')]
+    if ecarts:
+        valorisations['potentiel_moyen'] = np.mean(ecarts)
+        valorisations['potentiel_median'] = np.median(ecarts)
+        
+        # RECOMMANDATION
+        potentiel = valorisations['potentiel_median']
+        
+        if potentiel > 20:
+            valorisations['recommandation'] = "ACHAT FORT"
+            valorisations['justification'] = f"Sous-évalué de {potentiel:.1f}% par rapport aux pairs"
+        elif potentiel > 10:
+            valorisations['recommandation'] = "ACHAT"
+            valorisations['justification'] = f"Potentiel de hausse de {potentiel:.1f}%"
+        elif potentiel > -10:
+            valorisations['recommandation'] = "CONSERVER"
+            valorisations['justification'] = "Valorisation proche de la juste valeur"
+        elif potentiel > -20:
+            valorisations['recommandation'] = "VENTE"
+            valorisations['justification'] = f"Surévalué de {abs(potentiel):.1f}%"
+        else:
+            valorisations['recommandation'] = "VENTE FORTE"
+            valorisations['justification'] = f"Fortement surévalué de {abs(potentiel):.1f}%"
+    
+    return valorisations
+
+def calculate_financial_projections(symbole, financial_data, annees_projection=5):
+    """
+    Projections financières pondérées : 40% TCAM + 60% Régression Linéaire
+    """
+    import numpy as np
+    from sklearn.linear_model import LinearRegression
+    
+    # Récupérer l'historique
+    historique = []
+    for key, data in financial_data.items():
+        if data.get('symbole') == symbole:
+            annee = data.get('annee')
+            ca = data.get('compte_resultat', {}).get('chiffre_affaires', 0)
+            rn = data.get('compte_resultat', {}).get('resultat_net', 0)
+            
+            if ca > 0 and rn != 0:
+                historique.append({
+                    'annee': annee,
+                    'ca': ca,
+                    'resultat_net': rn
+                })
+    
+    if len(historique) < 2:
+        return {"erreur": "Historique insuffisant (minimum 2 ans)"}
+    
+    # Trier par année
+    historique = sorted(historique, key=lambda x: x['annee'])
+    
+    annees = np.array([h['annee'] for h in historique]).reshape(-1, 1)
+    ca_values = np.array([h['ca'] for h in historique])
+    rn_values = np.array([h['resultat_net'] for h in historique])
+    
+    # ========== 1. TCAM (Taux de Croissance Annuel Moyen) ==========
+    
+    def calcul_tcam(valeur_debut, valeur_fin, nb_annees):
+        if valeur_debut <= 0:
+            return 0
+        return (pow(valeur_fin / valeur_debut, 1/nb_annees) - 1) * 100
+    
+    tcam_ca = calcul_tcam(ca_values[0], ca_values[-1], len(ca_values) - 1)
+    tcam_rn = calcul_tcam(abs(rn_values[0]), abs(rn_values[-1]), len(rn_values) - 1) if rn_values[0] != 0 else 0
+    
+    # ========== 2. RÉGRESSION LINÉAIRE ==========
+    
+    model_ca = LinearRegression()
+    model_ca.fit(annees, ca_values)
+    
+    model_rn = LinearRegression()
+    model_rn.fit(annees, rn_values)
+    
+    # Qualité du modèle (R²)
+    r2_ca = model_ca.score(annees, ca_values)
+    r2_rn = model_rn.score(annees, rn_values)
+    
+    # ========== 3. PROJECTIONS PONDÉRÉES ==========
+    
+    projections = []
+    derniere_annee = historique[-1]['annee']
+    dernier_ca = historique[-1]['ca']
+    dernier_rn = historique[-1]['resultat_net']
+    
+    for i in range(1, annees_projection + 1):
+        annee_future = derniere_annee + i
+        
+        # Projection TCAM
+        ca_tcam = dernier_ca * pow(1 + tcam_ca/100, i)
+        rn_tcam = dernier_rn * pow(1 + tcam_rn/100, i)
+        
+        # Projection Régression
+        ca_reg = model_ca.predict([[annee_future]])[0]
+        rn_reg = model_rn.predict([[annee_future]])[0]
+        
+        # PONDÉRATION : 40% TCAM + 60% Régression
+        ca_projete = 0.4 * ca_tcam + 0.6 * ca_reg
+        rn_projete = 0.4 * rn_tcam + 0.6 * rn_reg
+        
+        projections.append({
+            'annee': int(annee_future),
+            'ca_projete': ca_projete,
+            'rn_projete': rn_projete,
+            'marge_nette_projetee': (rn_projete / ca_projete * 100) if ca_projete > 0 else 0
+        })
+    
+    return {
+        'historique': historique,
+        'tcam_ca': tcam_ca,
+        'tcam_rn': tcam_rn,
+        'r2_ca': r2_ca,
+        'r2_rn': r2_rn,
+        'projections': projections,
+        'methode': '40% TCAM + 60% Régression Linéaire'
+    }
 # ===========================
 # SECTION DÉVELOPPEUR
 # ===========================
