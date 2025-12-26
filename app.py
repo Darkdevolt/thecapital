@@ -739,11 +739,11 @@ def developer_section():
                 'variation_tresorerie': variation_tresorerie
             }
         
-        with tab4:
+with tab4:
             st.markdown("### 📊 RATIOS FINANCIERS CALCULÉS AUTOMATIQUEMENT")
             
             # Calculer les ratios
-           ratios = calculate_enhanced_financial_ratios(bilan_data, compte_resultat_data, flux_tresorerie_data)
+            ratios = calculate_enhanced_financial_ratios(bilan_data, compte_resultat_data, flux_tresorerie_data)
             
             if ratios:
                 col_r1, col_r2, col_r3 = st.columns(3)
@@ -754,6 +754,8 @@ def developer_section():
                         st.metric("Marge Nette", f"{ratios['marge_nette']:.2f}%")
                     if 'marge_exploitation' in ratios:
                         st.metric("Marge d'Exploitation", f"{ratios['marge_exploitation']:.2f}%")
+                    if 'marge_ebitda' in ratios:
+                        st.metric("Marge EBITDA", f"{ratios['marge_ebitda']:.2f}%")
                     if 'roe' in ratios:
                         st.metric("ROE", f"{ratios['roe']:.2f}%")
                     if 'roa' in ratios:
@@ -763,6 +765,8 @@ def developer_section():
                     st.markdown("**💧 LIQUIDITÉ**")
                     if 'ratio_liquidite_generale' in ratios:
                         st.metric("Ratio de Liquidité Générale", f"{ratios['ratio_liquidite_generale']:.2f}")
+                    if 'ratio_liquidite_reduite' in ratios:
+                        st.metric("Ratio de Liquidité Réduite", f"{ratios['ratio_liquidite_reduite']:.2f}")
                     if 'ratio_liquidite_immediate' in ratios:
                         st.metric("Ratio de Liquidité Immédiate", f"{ratios['ratio_liquidite_immediate']:.2f}")
                     
@@ -771,6 +775,8 @@ def developer_section():
                         st.metric("Ratio d'Endettement", f"{ratios['ratio_endettement']:.2f}%")
                     if 'taux_endettement' in ratios:
                         st.metric("Taux d'Endettement", f"{ratios['taux_endettement']:.2f}%")
+                    if 'debt_to_ebitda' in ratios:
+                        st.metric("Debt to EBITDA", f"{ratios['debt_to_ebitda']:.2f}")
                 
                 with col_r3:
                     st.markdown("**⚡ EFFICACITÉ**")
@@ -778,12 +784,16 @@ def developer_section():
                         st.metric("Rotation des Actifs", f"{ratios['rotation_actifs']:.2f}")
                     if 'rotation_stocks' in ratios:
                         st.metric("Rotation des Stocks", f"{ratios['rotation_stocks']:.2f}")
+                    if 'delai_recouvrement' in ratios:
+                        st.metric("Délai de Recouvrement", f"{ratios['delai_recouvrement']:.0f} jours")
                     
                     st.markdown("**📊 MARCHÉ**")
                     if 'per' in ratios:
                         st.metric("PER", f"{ratios['per']:.2f}")
                     if 'price_to_book' in ratios:
                         st.metric("Price to Book", f"{ratios['price_to_book']:.2f}")
+                    if 'ev_ebitda' in ratios:
+                        st.metric("EV/EBITDA", f"{ratios['ev_ebitda']:.2f}")
                 
                 # Interprétation des ratios
                 st.markdown("---")
@@ -814,6 +824,22 @@ def developer_section():
                         interpretations.append("👍 Endettement modéré (50-100%) - Structure acceptable")
                     else:
                         interpretations.append("⚠️ Fort endettement (>100%) - Risque financier élevé")
+                
+                if 'debt_to_ebitda' in ratios:
+                    if ratios['debt_to_ebitda'] < 3:
+                        interpretations.append("✅ Dette/EBITDA excellent (<3) - Capacité de remboursement forte")
+                    elif ratios['debt_to_ebitda'] < 5:
+                        interpretations.append("👍 Dette/EBITDA acceptable (3-5)")
+                    else:
+                        interpretations.append("⚠️ Dette/EBITDA élevé (>5) - Risque de surendettement")
+                
+                if 'ev_ebitda' in ratios:
+                    if ratios['ev_ebitda'] < 8:
+                        interpretations.append("✅ Multiple EV/EBITDA attractif (<8) - Action potentiellement sous-évaluée")
+                    elif ratios['ev_ebitda'] < 12:
+                        interpretations.append("👍 Multiple EV/EBITDA modéré (8-12)")
+                    else:
+                        interpretations.append("⚠️ Multiple EV/EBITDA élevé (>12) - Action potentiellement surévaluée")
                 
                 for interp in interpretations:
                     st.info(interp)
