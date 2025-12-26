@@ -743,7 +743,7 @@ def developer_section():
             st.markdown("### 📊 RATIOS FINANCIERS CALCULÉS AUTOMATIQUEMENT")
             
             # Calculer les ratios
-            ratios = calculate_financial_ratios(bilan_data, compte_resultat_data, flux_tresorerie_data)
+           ratios = calculate_enhanced_financial_ratios(bilan_data, compte_resultat_data, flux_tresorerie_data)
             
             if ratios:
                 col_r1, col_r2, col_r3 = st.columns(3)
