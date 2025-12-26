@@ -22,7 +22,7 @@ DEVELOPER_PASSWORD = "dev_brvm_2024"
 
 # Configuration Supabase
 SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
-SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90c2l3aXdsbm93eGVvbGJiZ3ZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzE2NDM0NTYsImV4cCI6MjA0NzIxOTQ1Nn0.vZ_r3yqVrIixEV6NZY2WLVt9Y8O2G9xH8yEhv3BbFcE"
 
 def init_supabase():
     """Initialiser la connexion à Supabase"""
@@ -31,6 +31,7 @@ def init_supabase():
             st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
             # Test de connexion
             test_response = st.session_state.supabase.table("financial_data").select("*", count="exact").limit(1).execute()
+            st.success("✅ Connexion Supabase établie")
         except Exception as e:
             st.error(f"❌ Erreur de connexion Supabase: {str(e)}")
             return None
@@ -139,10 +140,7 @@ def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie)
     # ========== CALCULS INTERMÉDIAIRES CRITIQUES ==========
     
     # EBITDA = Résultat d'exploitation + Amortissements
-    # Si tu n'as pas les amortissements séparés, utilise approximation
     ebitda = compte_resultat.get('resultat_exploitation', 0)
-    if 'amortissements' in compte_resultat:
-        ebitda += compte_resultat['amortissements']
     
     # EBIT = Résultat d'exploitation
     ebit = compte_resultat.get('resultat_exploitation', 0)
@@ -175,7 +173,9 @@ def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie)
         ratios['roa'] = (compte_resultat['resultat_net'] / bilan['actif_total']) * 100
     
     if ebit and bilan.get('actif_total'):
-        ratios['roic'] = (ebit * 0.75 / (bilan['actif_total'] - bilan.get('passif_courant', 0))) * 100  # Après impôt 25%
+        roic_denom = bilan['actif_total'] - bilan.get('passif_courant', 0)
+        if roic_denom > 0:
+            ratios['roic'] = (ebit * 0.75 / roic_denom) * 100
     
     # ========== RATIOS DE LIQUIDITÉ CORRIGÉS ==========
     
@@ -208,8 +208,8 @@ def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie)
         ratios['debt_to_ebitda'] = bilan['dettes_totales'] / ebitda
     
     # Couverture des intérêts
-    if ebit and compte_resultat.get('charges_financieres') and compte_resultat.get('charges_financieres') > 0:
-        ratios['couverture_interets'] = ebit / compte_resultat['charges_financieres']
+    if ebit and compte_resultat.get('charges_financieres') and abs(compte_resultat.get('charges_financieres', 0)) > 0:
+        ratios['couverture_interets'] = ebit / abs(compte_resultat['charges_financieres'])
     
     # ========== RATIOS D'EFFICACITÉ ==========
     
@@ -227,6 +227,11 @@ def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie)
     
     if bilan.get('cours_action') and compte_resultat.get('benefice_par_action') and compte_resultat.get('benefice_par_action') > 0:
         ratios['per'] = bilan['cours_action'] / compte_resultat['benefice_par_action']
+    elif bilan.get('cours_action') and compte_resultat.get('resultat_net') and bilan.get('nb_actions') and bilan.get('nb_actions') > 0:
+        bpa = compte_resultat['resultat_net'] / bilan['nb_actions']
+        if bpa > 0:
+            ratios['per'] = bilan['cours_action'] / bpa
+            ratios['benefice_par_action'] = bpa
     
     if bilan.get('cours_action') and bilan.get('capitaux_propres_par_action') and bilan.get('capitaux_propres_par_action') > 0:
         ratios['price_to_book'] = bilan['cours_action'] / bilan['capitaux_propres_par_action']
@@ -238,10 +243,6 @@ def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie)
     # EV/Sales
     if enterprise_value and compte_resultat.get('chiffre_affaires') and compte_resultat.get('chiffre_affaires') > 0:
         ratios['ev_sales'] = enterprise_value / compte_resultat['chiffre_affaires']
-    
-    # Dividend Yield
-    if compte_resultat.get('dividende_par_action') and bilan.get('cours_action') and bilan.get('cours_action') > 0:
-        ratios['dividend_yield'] = (compte_resultat['dividende_par_action'] / bilan['cours_action']) * 100
     
     # ========== RATIOS DE FLUX DE TRÉSORERIE ==========
     
@@ -265,8 +266,7 @@ def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie)
     
     return ratios
 
-
-def calculate_valuation_multiples(symbole, annee, ratios_entreprise, df_brvm, financial_data):
+def calculate_valuation_multiples(symbole, annee, ratios_entreprise, financial_data):
     """
     Valorisation par multiples avec comparaison sectorielle (MÉDIANE)
     """
@@ -300,33 +300,44 @@ def calculate_valuation_multiples(symbole, annee, ratios_entreprise, df_brvm, fi
             secteur_multiples['ev_sales'].append(ratios['ev_sales'])
     
     # Calculer les MÉDIANES (plus robuste que moyenne)
-    import numpy as np
-    
     medianes = {}
     for key, values in secteur_multiples.items():
-        if len(values) >= 3:  # Minimum 3 comparables
+        if len(values) >= 2:  # Minimum 2 comparables
             medianes[f"{key}_median"] = np.median(values)
     
     # VALORISATIONS BASÉES SUR LES MÉDIANES
     valorisations = {}
     
     # 1. Valorisation par P/E médian
-    if 'per_median' in medianes and ratios_entreprise.get('benefice_par_action'):
-        juste_valeur_per = medianes['per_median'] * ratios_entreprise['benefice_par_action']
-        valorisations['juste_valeur_per'] = juste_valeur_per
+    if 'per_median' in medianes:
+        bpa = ratios_entreprise.get('benefice_par_action')
+        if not bpa and ratios_entreprise.get('resultat_net') and ratios_entreprise.get('nb_actions'):
+            bpa = ratios_entreprise['resultat_net'] / ratios_entreprise['nb_actions']
         
-        cours_actuel = ratios_entreprise.get('cours_action', 0)
-        if cours_actuel > 0:
-            valorisations['ecart_per'] = ((juste_valeur_per - cours_actuel) / cours_actuel) * 100
+        if bpa:
+            juste_valeur_per = medianes['per_median'] * bpa
+            valorisations['juste_valeur_per'] = juste_valeur_per
+            
+            cours_actuel = ratios_entreprise.get('cours_action', 0)
+            if cours_actuel > 0:
+                valorisations['ecart_per'] = ((juste_valeur_per - cours_actuel) / cours_actuel) * 100
     
     # 2. Valorisation par P/B médian
-    if 'price_to_book_median' in medianes and ratios_entreprise.get('capitaux_propres_par_action'):
-        juste_valeur_pb = medianes['price_to_book_median'] * ratios_entreprise['capitaux_propres_par_action']
-        valorisations['juste_valeur_pb'] = juste_valeur_pb
+    if 'price_to_book_median' in medianes:
+        if ratios_entreprise.get('capitaux_propres_par_action'):
+            cpa = ratios_entreprise['capitaux_propres_par_action']
+        elif ratios_entreprise.get('capitaux_propres') and ratios_entreprise.get('nb_actions'):
+            cpa = ratios_entreprise['capitaux_propres'] / ratios_entreprise['nb_actions']
+        else:
+            cpa = None
         
-        cours_actuel = ratios_entreprise.get('cours_action', 0)
-        if cours_actuel > 0:
-            valorisations['ecart_pb'] = ((juste_valeur_pb - cours_actuel) / cours_actuel) * 100
+        if cpa:
+            juste_valeur_pb = medianes['price_to_book_median'] * cpa
+            valorisations['juste_valeur_pb'] = juste_valeur_pb
+            
+            cours_actuel = ratios_entreprise.get('cours_action', 0)
+            if cours_actuel > 0:
+                valorisations['ecart_pb'] = ((juste_valeur_pb - cours_actuel) / cours_actuel) * 100
     
     # 3. Valorisation par EV/EBITDA médian
     if 'ev_ebitda_median' in medianes and ratios_entreprise.get('ebitda'):
@@ -376,12 +387,10 @@ def calculate_valuation_multiples(symbole, annee, ratios_entreprise, df_brvm, fi
     
     return valorisations
 
-def calculate_financial_projections(symbole, financial_data, annees_projection=5):
+def calculate_financial_projections(symbole, financial_data, annees_projection=3):
     """
     Projections financières pondérées : 40% TCAM + 60% Régression Linéaire
     """
-    import numpy as np
-    from sklearn.linear_model import LinearRegression
     
     # Récupérer l'historique
     historique = []
@@ -393,7 +402,7 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=5
             
             if ca > 0 and rn != 0:
                 historique.append({
-                    'annee': annee,
+                    'annee': int(annee),
                     'ca': ca,
                     'resultat_net': rn
                 })
@@ -454,20 +463,21 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=5
         
         projections.append({
             'annee': int(annee_future),
-            'ca_projete': ca_projete,
-            'rn_projete': rn_projete,
-            'marge_nette_projetee': (rn_projete / ca_projete * 100) if ca_projete > 0 else 0
+            'ca_projete': float(ca_projete),
+            'rn_projete': float(rn_projete),
+            'marge_nette_projetee': float((rn_projete / ca_projete * 100) if ca_projete > 0 else 0)
         })
     
     return {
         'historique': historique,
-        'tcam_ca': tcam_ca,
-        'tcam_rn': tcam_rn,
-        'r2_ca': r2_ca,
-        'r2_rn': r2_rn,
+        'tcam_ca': float(tcam_ca),
+        'tcam_rn': float(tcam_rn),
+        'r2_ca': float(r2_ca),
+        'r2_rn': float(r2_rn),
         'projections': projections,
         'methode': '40% TCAM + 60% Régression Linéaire'
     }
+
 # ===========================
 # FONCTIONS DE SCRAPING BRVM
 # ===========================
@@ -551,9 +561,6 @@ def scrape_brvm_data():
                 df_sector = pd.DataFrame(data, columns=headers_list + ['Secteur'])
                 df_sector = clean_dataframe(df_sector)
                 all_data.append(df_sector)
-                st.success(f"✅ {secteur}: {len(df_sector)} titres trouvés")
-            else:
-                st.warning(f"⚠️ Aucune donnée trouvée pour {secteur}")
                 
         except Exception as e:
             st.warning(f"❌ Erreur lors du scraping de {secteur}: {str(e)}")
@@ -564,38 +571,39 @@ def scrape_brvm_data():
         df_combined = pd.concat(all_data, ignore_index=True)
         
         # Supprimer les doublons (en gardant la première occurrence)
-        df_combined = df_combined.drop_duplicates(subset='Symbole', keep='first')
-        
-        # Afficher des statistiques par secteur
-        st.info(f"📊 Données combinées: {len(df_combined)} titres uniques")
-        
-        if 'Secteur' in df_combined.columns:
-            sector_stats = df_combined['Secteur'].value_counts()
-            st.write("**Répartition par secteur:**")
-            for secteur, count in sector_stats.items():
-                st.write(f"- {secteur}: {count} titres")
+        if 'Symbole' in df_combined.columns:
+            df_combined = df_combined.drop_duplicates(subset='Symbole', keep='first')
         
         return df_combined
     else:
         st.error("❌ Aucune donnée n'a pu être récupérée")
         return None
-        
+
 def clean_dataframe(df):
     """Nettoyer et formater le DataFrame"""
     df = df.copy()
+    if df.empty:
+        return df
+    
     df.columns = [col.strip() for col in df.columns]
     
+    # Identifier les colonnes numériques
     numeric_columns = []
     for col in df.columns:
-        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation']):
+        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation', 'Capitalisation']):
             numeric_columns.append(col)
     
+    # Nettoyer les valeurs numériques
     for col in numeric_columns:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace(',', '.')
             df[col] = df[col].str.replace(' ', '')
-            if 'Variation' in col:
-                df[col] = df[col].str.replace('%', '')
+            df[col] = df[col].str.replace('FCFA', '')
+            df[col] = df[col].str.replace('F', '')
+            df[col] = df[col].str.replace('CFA', '')
+            df[col] = df[col].str.replace('%', '')
+            df[col] = df[col].str.replace('€', '')
+            df[col] = df[col].str.replace('$', '')
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
     if 'Symbole' in df.columns:
@@ -729,20 +737,52 @@ def developer_section():
             
             with col_a:
                 st.markdown("**ACTIF**")
-                actif_immobilise = st.number_input("Actif Immobilisé (FCFA)", value=float(existing_data.get('bilan', {}).get('actif_immobilise', 0)), step=1000000.0, key=f"actif_immo_{data_key}")
-                actif_courant = st.number_input("Actif Courant (FCFA)", value=float(existing_data.get('bilan', {}).get('actif_courant', 0)), step=1000000.0, key=f"actif_courant_{data_key}")
-                stocks = st.number_input("Stocks (FCFA)", value=float(existing_data.get('bilan', {}).get('stocks', 0)), step=1000000.0, key=f"stocks_{data_key}")
-                creances = st.number_input("Créances (FCFA)", value=float(existing_data.get('bilan', {}).get('creances', 0)), step=1000000.0, key=f"creances_{data_key}")
-                tresorerie = st.number_input("Trésorerie et équivalents (FCFA)", value=float(existing_data.get('bilan', {}).get('tresorerie', 0)), step=1000000.0, key=f"tresorerie_{data_key}")
+                actif_immobilise = st.number_input("Actif Immobilisé (FCFA)", 
+                                                  value=float(existing_data.get('bilan', {}).get('actif_immobilise', 0)), 
+                                                  step=1000000.0, 
+                                                  format="%.0f",
+                                                  key=f"actif_immo_{data_key}")
+                actif_courant = st.number_input("Actif Courant (FCFA)", 
+                                               value=float(existing_data.get('bilan', {}).get('actif_courant', 0)), 
+                                               step=1000000.0,
+                                               format="%.0f",
+                                               key=f"actif_courant_{data_key}")
+                stocks = st.number_input("Stocks (FCFA)", 
+                                        value=float(existing_data.get('bilan', {}).get('stocks', 0)), 
+                                        step=1000000.0,
+                                        format="%.0f",
+                                        key=f"stocks_{data_key}")
+                creances = st.number_input("Créances (FCFA)", 
+                                          value=float(existing_data.get('bilan', {}).get('creances', 0)), 
+                                          step=1000000.0,
+                                          format="%.0f",
+                                          key=f"creances_{data_key}")
+                tresorerie = st.number_input("Trésorerie et équivalents (FCFA)", 
+                                            value=float(existing_data.get('bilan', {}).get('tresorerie', 0)), 
+                                            step=1000000.0,
+                                            format="%.0f",
+                                            key=f"tresorerie_{data_key}")
                 
                 actif_total = actif_immobilise + actif_courant
                 st.metric("**ACTIF TOTAL**", f"{actif_total:,.0f} FCFA")
             
             with col_b:
                 st.markdown("**PASSIF**")
-                capitaux_propres = st.number_input("Capitaux Propres (FCFA)", value=float(existing_data.get('bilan', {}).get('capitaux_propres', 0)), step=1000000.0, key=f"cap_propres_{data_key}")
-                dettes_long_terme = st.number_input("Dettes Long Terme (FCFA)", value=float(existing_data.get('bilan', {}).get('dettes_long_terme', 0)), step=1000000.0, key=f"dettes_lt_{data_key}")
-                passif_courant = st.number_input("Passif Courant (FCFA)", value=float(existing_data.get('bilan', {}).get('passif_courant', 0)), step=1000000.0, key=f"passif_courant_{data_key}")
+                capitaux_propres = st.number_input("Capitaux Propres (FCFA)", 
+                                                  value=float(existing_data.get('bilan', {}).get('capitaux_propres', 0)), 
+                                                  step=1000000.0,
+                                                  format="%.0f",
+                                                  key=f"cap_propres_{data_key}")
+                dettes_long_terme = st.number_input("Dettes Long Terme (FCFA)", 
+                                                   value=float(existing_data.get('bilan', {}).get('dettes_long_terme', 0)), 
+                                                   step=1000000.0,
+                                                   format="%.0f",
+                                                   key=f"dettes_lt_{data_key}")
+                passif_courant = st.number_input("Passif Courant (FCFA)", 
+                                                value=float(existing_data.get('bilan', {}).get('passif_courant', 0)), 
+                                                step=1000000.0,
+                                                format="%.0f",
+                                                key=f"passif_courant_{data_key}")
                 
                 dettes_totales = dettes_long_terme + passif_courant
                 passif_total = capitaux_propres + dettes_totales
@@ -765,6 +805,7 @@ def developer_section():
                         f"Cours de {symbole} (FCFA)", 
                         value=float(cours_brvm), 
                         step=100.0, 
+                        format="%.0f",
                         key=f"cours_{data_key}",
                         help=f"Cours actuel sur BRVM: {cours_brvm:,.0f} FCFA"
                     )
@@ -773,13 +814,17 @@ def developer_section():
                     cours_action = st.number_input(
                         f"Cours de {symbole} (FCFA)", 
                         value=float(existing_data.get('bilan', {}).get('cours_action', 0)), 
-                        step=100.0, 
+                        step=100.0,
+                        format="%.0f",
                         key=f"cours_{data_key}",
                         help="Symbole non trouvé - saisie manuelle requise"
                     )
             
             with col_m2:
-                nb_actions = st.number_input("Nombre d'actions", value=int(existing_data.get('bilan', {}).get('nb_actions', 0)), step=1000, key=f"nb_actions_{data_key}")
+                nb_actions = st.number_input("Nombre d'actions", 
+                                            value=int(existing_data.get('bilan', {}).get('nb_actions', 0)), 
+                                            step=1000,
+                                            key=f"nb_actions_{data_key}")
             
             with col_m3:
                 if nb_actions > 0 and capitaux_propres > 0:
@@ -790,34 +835,50 @@ def developer_section():
             
             # Sauvegarder les données du bilan
             bilan_data = {
-                'actif_immobilise': actif_immobilise,
-                'actif_courant': actif_courant,
-                'stocks': stocks,
-                'creances': creances,
-                'tresorerie': tresorerie,
-                'actif_total': actif_total,
-                'capitaux_propres': capitaux_propres,
-                'dettes_long_terme': dettes_long_terme,
-                'passif_courant': passif_courant,
-                'dettes_totales': dettes_totales,
-                'passif_total': passif_total,
-                'cours_action': cours_action,
-                'nb_actions': nb_actions,
-                'capitaux_propres_par_action': cap_propres_par_action,
+                'actif_immobilise': float(actif_immobilise),
+                'actif_courant': float(actif_courant),
+                'stocks': float(stocks),
+                'creances': float(creances),
+                'tresorerie': float(tresorerie),
+                'actif_total': float(actif_total),
+                'capitaux_propres': float(capitaux_propres),
+                'dettes_long_terme': float(dettes_long_terme),
+                'passif_courant': float(passif_courant),
+                'dettes_totales': float(dettes_totales),
+                'passif_total': float(passif_total),
+                'cours_action': float(cours_action),
+                'nb_actions': int(nb_actions),
+                'capitaux_propres_par_action': float(cap_propres_par_action),
                 'cours_source': 'auto' if (symbole_existe and cours_brvm > 0) else 'manual'
             }
         
         with tab2:
             st.markdown("### 💰 COMPTE DE RÉSULTAT")
             
-            chiffre_affaires = st.number_input("Chiffre d'Affaires (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('chiffre_affaires', 0)), step=1000000.0, key=f"ca_{data_key}")
-            charges_exploitation = st.number_input("Charges d'Exploitation (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('charges_exploitation', 0)), step=1000000.0, key=f"charges_exp_{data_key}")
+            chiffre_affaires = st.number_input("Chiffre d'Affaires (FCFA)", 
+                                              value=float(existing_data.get('compte_resultat', {}).get('chiffre_affaires', 0)), 
+                                              step=1000000.0,
+                                              format="%.0f",
+                                              key=f"ca_{data_key}")
+            charges_exploitation = st.number_input("Charges d'Exploitation (FCFA)", 
+                                                  value=float(existing_data.get('compte_resultat', {}).get('charges_exploitation', 0)), 
+                                                  step=1000000.0,
+                                                  format="%.0f",
+                                                  key=f"charges_exp_{data_key}")
             
             resultat_exploitation = chiffre_affaires - charges_exploitation
             st.metric("Résultat d'Exploitation", f"{resultat_exploitation:,.0f} FCFA")
             
-            charges_financieres = st.number_input("Charges Financières (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('charges_financieres', 0)), step=100000.0, key=f"charges_fin_{data_key}")
-            produits_financiers = st.number_input("Produits Financiers (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('produits_financiers', 0)), step=100000.0, key=f"prod_fin_{data_key}")
+            charges_financieres = st.number_input("Charges Financières (FCFA)", 
+                                                 value=float(existing_data.get('compte_resultat', {}).get('charges_financieres', 0)), 
+                                                 step=100000.0,
+                                                 format="%.0f",
+                                                 key=f"charges_fin_{data_key}")
+            produits_financiers = st.number_input("Produits Financiers (FCFA)", 
+                                                 value=float(existing_data.get('compte_resultat', {}).get('produits_financiers', 0)), 
+                                                 step=100000.0,
+                                                 format="%.0f",
+                                                 key=f"prod_fin_{data_key}")
             
             resultat_financier = produits_financiers - charges_financieres
             st.metric("Résultat Financier", f"{resultat_financier:,.0f} FCFA")
@@ -825,7 +886,11 @@ def developer_section():
             resultat_avant_impot = resultat_exploitation + resultat_financier
             st.metric("Résultat Avant Impôt", f"{resultat_avant_impot:,.0f} FCFA")
             
-            impots = st.number_input("Impôts sur les sociétés (FCFA)", value=float(existing_data.get('compte_resultat', {}).get('impots', 0)), step=100000.0, key=f"impots_{data_key}")
+            impots = st.number_input("Impôts sur les sociétés (FCFA)", 
+                                    value=float(existing_data.get('compte_resultat', {}).get('impots', 0)), 
+                                    step=100000.0,
+                                    format="%.0f",
+                                    key=f"impots_{data_key}")
             
             resultat_net = resultat_avant_impot - impots
             st.metric("**RÉSULTAT NET**", f"{resultat_net:,.0f} FCFA", delta=None)
@@ -839,39 +904,51 @@ def developer_section():
             
             # Sauvegarder les données du compte de résultat
             compte_resultat_data = {
-                'chiffre_affaires': chiffre_affaires,
-                'charges_exploitation': charges_exploitation,
-                'resultat_exploitation': resultat_exploitation,
-                'charges_financieres': charges_financieres,
-                'produits_financiers': produits_financiers,
-                'resultat_financier': resultat_financier,
-                'resultat_avant_impot': resultat_avant_impot,
-                'impots': impots,
-                'resultat_net': resultat_net,
-                'benefice_par_action': benefice_par_action
+                'chiffre_affaires': float(chiffre_affaires),
+                'charges_exploitation': float(charges_exploitation),
+                'resultat_exploitation': float(resultat_exploitation),
+                'charges_financieres': float(charges_financieres),
+                'produits_financiers': float(produits_financiers),
+                'resultat_financier': float(resultat_financier),
+                'resultat_avant_impot': float(resultat_avant_impot),
+                'impots': float(impots),
+                'resultat_net': float(resultat_net),
+                'benefice_par_action': float(benefice_par_action)
             }
         
         with tab3:
             st.markdown("### 💵 TABLEAU DES FLUX DE TRÉSORERIE")
             
             st.markdown("**Flux de Trésorerie d'Exploitation**")
-            flux_exploitation = st.number_input("Flux d'Exploitation (FCFA)", value=float(existing_data.get('flux_tresorerie', {}).get('flux_exploitation', 0)), step=1000000.0, key=f"flux_exp_{data_key}")
+            flux_exploitation = st.number_input("Flux d'Exploitation (FCFA)", 
+                                               value=float(existing_data.get('flux_tresorerie', {}).get('flux_exploitation', 0)), 
+                                               step=1000000.0,
+                                               format="%.0f",
+                                               key=f"flux_exp_{data_key}")
             
             st.markdown("**Flux de Trésorerie d'Investissement**")
-            flux_investissement = st.number_input("Flux d'Investissement (FCFA)", value=float(existing_data.get('flux_tresorerie', {}).get('flux_investissement', 0)), step=1000000.0, key=f"flux_inv_{data_key}")
+            flux_investissement = st.number_input("Flux d'Investissement (FCFA)", 
+                                                 value=float(existing_data.get('flux_tresorerie', {}).get('flux_investissement', 0)), 
+                                                 step=1000000.0,
+                                                 format="%.0f",
+                                                 key=f"flux_inv_{data_key}")
             
             st.markdown("**Flux de Trésorerie de Financement**")
-            flux_financement = st.number_input("Flux de Financement (FCFA)", value=float(existing_data.get('flux_tresorerie', {}).get('flux_financement', 0)), step=1000000.0, key=f"flux_fin_{data_key}")
+            flux_financement = st.number_input("Flux de Financement (FCFA)", 
+                                              value=float(existing_data.get('flux_tresorerie', {}).get('flux_financement', 0)), 
+                                              step=1000000.0,
+                                              format="%.0f",
+                                              key=f"flux_fin_{data_key}")
             
             variation_tresorerie = flux_exploitation + flux_investissement + flux_financement
             st.metric("**Variation de Trésorerie**", f"{variation_tresorerie:,.0f} FCFA")
             
             # Sauvegarder les données des flux de trésorerie
             flux_tresorerie_data = {
-                'flux_exploitation': flux_exploitation,
-                'flux_investissement': flux_investissement,
-                'flux_financement': flux_financement,
-                'variation_tresorerie': variation_tresorerie
+                'flux_exploitation': float(flux_exploitation),
+                'flux_investissement': float(flux_investissement),
+                'flux_financement': float(flux_financement),
+                'variation_tresorerie': float(variation_tresorerie)
             }
         
         with tab4:
@@ -887,8 +964,8 @@ def developer_section():
                     st.markdown("**📈 RENTABILITÉ**")
                     if 'marge_nette' in ratios:
                         st.metric("Marge Nette", f"{ratios['marge_nette']:.2f}%")
-                    if 'marge_exploitation' in ratios:
-                        st.metric("Marge d'Exploitation", f"{ratios['marge_exploitation']:.2f}%")
+                    if 'marge_ebit' in ratios:
+                        st.metric("Marge EBIT", f"{ratios['marge_ebit']:.2f}%")
                     if 'marge_ebitda' in ratios:
                         st.metric("Marge EBITDA", f"{ratios['marge_ebitda']:.2f}%")
                     if 'roe' in ratios:
@@ -989,8 +1066,6 @@ def developer_section():
             if st.button("💾 Sauvegarder les Données", type="primary", use_container_width=True):
                 # Préparer les données pour Supabase
                 data_to_save = {
-                    'symbole': symbole,
-                    'annee': annee,
                     'bilan': bilan_data,
                     'compte_resultat': compte_resultat_data,
                     'flux_tresorerie': flux_tresorerie_data,
@@ -1042,61 +1117,60 @@ def developer_section():
 
 def display_brvm_data():
     """Afficher les données BRVM avec analyse fondamentale"""
-
-    st.sidebar.header("  Paramètres")
-
-    if st.sidebar.button("  Actualiser les données"):
+    
+    st.sidebar.header("⚙️ Paramètres")
+    
+    if st.sidebar.button("🔄 Actualiser les données"):
         st.cache_data.clear()
         st.rerun()
-
+    
     with st.spinner("Récupération des données BRVM..."):
         df = scrape_brvm_data()
-
-    # Début du bloc principal
+    
     if df is not None:
         # Statistiques générales
-        st.subheader("  Statistiques du marché")
-
+        st.subheader("📈 Statistiques du marché")
+        
         col1, col2, col3, col4 = st.columns(4)
-
+        
         with col1:
             st.metric("Nombre total de titres", len(df))
-
+        
         with col2:
             if 'Variation (%)' in df.columns:
                 hausse = len(df[df['Variation (%)'] > 0])
                 st.metric("En hausse", hausse, f"+{hausse}")
-
+        
         with col3:
             if 'Variation (%)' in df.columns:
                 baisse = len(df[df['Variation (%)'] < 0])
                 st.metric("En baisse", baisse, f"-{baisse}")
-
+        
         with col4:
             if 'Variation (%)' in df.columns:
                 stable = len(df[df['Variation (%)'] == 0])
                 st.metric("Stables", stable)
-
+        
         # Filtre par secteur
         st.markdown("---")
-        st.subheader("  Filtrage par secteur")
-
+        st.subheader("🔍 Filtrage par secteur")
+        
         if 'Secteur' in df.columns:
             secteurs = ['Tous les secteurs'] + sorted(df['Secteur'].dropna().unique().tolist())
             secteur_selectionne = st.selectbox("Choisissez un secteur", secteurs)
-
+            
             if secteur_selectionne != 'Tous les secteurs':
                 df_filtre = df[df['Secteur'] == secteur_selectionne]
-                st.info(f"  {secteur_selectionne}: {len(df_filtre)} titres")
+                st.info(f"📊 {secteur_selectionne}: {len(df_filtre)} titres")
             else:
                 df_filtre = df
         else:
             df_filtre = df
             st.warning("Information sur les secteurs non disponible")
-
+        
         # Affichage des données
-        st.subheader("  Cours des Actions")
-
+        st.subheader("📋 Cours des Actions")
+        
         def color_variation(val):
             if isinstance(val, (int, float)):
                 if val > 0:
@@ -1104,51 +1178,128 @@ def display_brvm_data():
                 elif val < 0:
                     return 'color: red; font-weight: bold'
             return ''
-
+        
         if 'Variation (%)' in df_filtre.columns:
-            try:
-                styled_df = df_filtre.style.map(color_variation, subset=['Variation (%)'])
-                st.dataframe(styled_df, use_container_width=True, height=400)
-            except:
-                st.dataframe(df_filtre, use_container_width=True, height=400)
+            styled_df = df_filtre.style.map(color_variation, subset=['Variation (%)'])
+            st.dataframe(styled_df, use_container_width=True, height=400)
         else:
             st.dataframe(df_filtre, use_container_width=True, height=400)
-
+        
         # Section Analyse Fondamentale
         st.markdown("---")
-        st.subheader("  Analyse Fondamentale par Titre")
-
+        st.subheader("📊 Analyse Fondamentale par Titre")
+        
         if 'Symbole' in df_filtre.columns:
             symboles_list = [''] + df_filtre['Symbole'].dropna().unique().tolist()
             symbole_selected = st.selectbox("Sélectionnez un titre pour voir son analyse fondamentale", symboles_list)
             
-            # Note: Si tu as une logique ici pour afficher l'analyse, elle irait ici.
-            # Dans le code fourni, ce bloc était vide ("pass").
-
+            if symbole_selected:
+                # Charger les données financières
+                financial_data = init_storage()
+                
+                # Trouver les données pour ce symbole
+                symbole_data = {}
+                for key, data in financial_data.items():
+                    if data.get('symbole') == symbole_selected:
+                        symbole_data[data['annee']] = data
+                
+                if symbole_data:
+                    st.success(f"✅ Données financières disponibles pour {symbole_selected}")
+                    
+                    # Afficher les années disponibles
+                    annees = sorted(symbole_data.keys())
+                    annee_selectionnee = st.selectbox("Sélectionnez l'année", annees, index=len(annees)-1)
+                    
+                    if annee_selectionnee:
+                        data = symbole_data[annee_selectionnee]
+                        
+                        # Afficher les ratios
+                        st.markdown(f"### 📊 Ratios pour {symbole_selected} - {annee_selectionnee}")
+                        
+                        if 'ratios' in data:
+                            ratios = data['ratios']
+                            
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.markdown("**Rentabilité**")
+                                if 'roe' in ratios:
+                                    st.metric("ROE", f"{ratios['roe']:.2f}%")
+                                if 'roa' in ratios:
+                                    st.metric("ROA", f"{ratios['roa']:.2f}%")
+                                if 'marge_nette' in ratios:
+                                    st.metric("Marge Nette", f"{ratios['marge_nette']:.2f}%")
+                            
+                            with col2:
+                                st.markdown("**Liquidité**")
+                                if 'ratio_liquidite_generale' in ratios:
+                                    st.metric("Liquidité Générale", f"{ratios['ratio_liquidite_generale']:.2f}")
+                                if 'ratio_liquidite_reduite' in ratios:
+                                    st.metric("Liquidité Réduite", f"{ratios['ratio_liquidite_reduite']:.2f}")
+                            
+                            with col3:
+                                st.markdown("**Marché**")
+                                if 'per' in ratios:
+                                    st.metric("PER", f"{ratios['per']:.2f}")
+                                if 'price_to_book' in ratios:
+                                    st.metric("Price to Book", f"{ratios['price_to_book']:.2f}")
+                                if 'ev_ebitda' in ratios:
+                                    st.metric("EV/EBITDA", f"{ratios['ev_ebitda']:.2f}")
+                            
+                            # Valorisation par multiples
+                            st.markdown("### 💹 Valorisation par Multiples")
+                            valorisations = calculate_valuation_multiples(
+                                symbole_selected, 
+                                annee_selectionnee, 
+                                {**data['bilan'], **data['compte_resultat'], **data.get('ratios', {})},
+                                financial_data
+                            )
+                            
+                            if 'recommandation' in valorisations:
+                                col_rec1, col_rec2 = st.columns([1, 2])
+                                with col_rec1:
+                                    if "ACHAT" in valorisations['recommandation']:
+                                        st.success(f"**{valorisations['recommandation']}**")
+                                    elif "VENTE" in valorisations['recommandation']:
+                                        st.error(f"**{valorisations['recommandation']}**")
+                                    else:
+                                        st.warning(f"**{valorisations['recommandation']}**")
+                                
+                                with col_rec2:
+                                    st.info(f"*{valorisations.get('justification', '')}*")
+                            
+                            # Projections financières
+                            st.markdown("### 📈 Projections Financières")
+                            projections = calculate_financial_projections(symbole_selected, financial_data)
+                            
+                            if 'projections' in projections:
+                                df_proj = pd.DataFrame(projections['projections'])
+                                st.dataframe(df_proj.style.format({
+                                    'ca_projete': '{:,.0f}',
+                                    'rn_projete': '{:,.0f}',
+                                    'marge_nette_projetee': '{:.2f}%'
+                                }), use_container_width=True)
+                                
+                                st.caption(f"Méthode: {projections.get('methode', '')}")
+                                st.caption(f"TCAM CA: {projections.get('tcam_ca', 0):.2f}% | R² CA: {projections.get('r2_ca', 0):.3f}")
+                else:
+                    st.warning(f"ℹ️ Aucune donnée financière sauvegardée pour {symbole_selected}")
+                    st.info("Utilisez la section Développeur pour saisir les données financières de cette entreprise")
+        
         # Export CSV
         st.markdown("---")
-        st.subheader("  Export des données")
-
-        col_exp1, col_exp2 = st.columns(2)
-
-        with col_exp1:
-            csv = df_filtre.to_csv(index=False, sep=';', decimal=',')
-            st.download_button(
-                label="  Télécharger en CSV",
-                data=csv,
-                file_name=f"brvm_cours.csv",
-                mime="text/csv"
-            )
-
-        with col_exp2:
-            if 'Secteur' in df.columns:
-                st.info("Pour exporter par secteur, filtrez d'abord ci-dessus puis téléchargez.")
-            else:
-                st.info("Détail secteur non disponible")
-
-    # C'est ici que se trouvait ton erreur. Ce 'else' est maintenant correctement aligné avec 'if df is not None:'
+        st.subheader("💾 Export des données")
+        
+        csv = df_filtre.to_csv(index=False, sep=';', decimal=',')
+        st.download_button(
+            label="📥 Télécharger en CSV",
+            data=csv,
+            file_name=f"brvm_cours_{secteur_selectionne.replace(' ', '_') if 'secteur_selectionne' in locals() else 'tous'}.csv",
+            mime="text/csv"
+        )
+    
     else:
-        st.warning("  Impossible de récupérer les données BRVM")
+        st.warning("⚠️ Impossible de récupérer les données BRVM")
         st.info("Vérifiez votre connexion internet ou réessayez plus tard")
 
 # ===========================
@@ -1217,6 +1368,8 @@ def main():
         requests
         beautifulsoup4
         supabase
+        scikit-learn
+        numpy
         ```
         
         2. Déployez sur Streamlit Cloud en connectant votre GitHub
