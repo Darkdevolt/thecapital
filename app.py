@@ -22,7 +22,7 @@ DEVELOPER_PASSWORD = "dev_brvm_2024"
 
 # Configuration Supabase
 SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90c2l3aXdsbm93eGVvbGJiZ3ZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzE2NDM0NTYsImV4cCI6MjA0NzIxOTQ1Nn0.vZ_r3yqVrIixEV6NZY2WLVt9Y8O2G9xH8yEhv3BbFcE"
+SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
 
 def init_supabase():
     """Initialiser la connexion à Supabase"""
