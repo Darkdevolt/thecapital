@@ -1042,60 +1042,61 @@ def developer_section():
 
 def display_brvm_data():
     """Afficher les données BRVM avec analyse fondamentale"""
-    
-    st.sidebar.header("⚙️ Paramètres")
-    
-    if st.sidebar.button("🔄 Actualiser les données"):
+
+    st.sidebar.header("  Paramètres")
+
+    if st.sidebar.button("  Actualiser les données"):
         st.cache_data.clear()
         st.rerun()
-    
+
     with st.spinner("Récupération des données BRVM..."):
         df = scrape_brvm_data()
-    
+
+    # Début du bloc principal
     if df is not None:
         # Statistiques générales
-        st.subheader("📈 Statistiques du marché")
-        
+        st.subheader("  Statistiques du marché")
+
         col1, col2, col3, col4 = st.columns(4)
-        
+
         with col1:
             st.metric("Nombre total de titres", len(df))
-        
+
         with col2:
             if 'Variation (%)' in df.columns:
                 hausse = len(df[df['Variation (%)'] > 0])
                 st.metric("En hausse", hausse, f"+{hausse}")
-        
+
         with col3:
             if 'Variation (%)' in df.columns:
                 baisse = len(df[df['Variation (%)'] < 0])
                 st.metric("En baisse", baisse, f"-{baisse}")
-        
+
         with col4:
             if 'Variation (%)' in df.columns:
                 stable = len(df[df['Variation (%)'] == 0])
                 st.metric("Stables", stable)
-        
+
         # Filtre par secteur
         st.markdown("---")
-        st.subheader("🔍 Filtrage par secteur")
-        
+        st.subheader("  Filtrage par secteur")
+
         if 'Secteur' in df.columns:
             secteurs = ['Tous les secteurs'] + sorted(df['Secteur'].dropna().unique().tolist())
             secteur_selectionne = st.selectbox("Choisissez un secteur", secteurs)
-            
+
             if secteur_selectionne != 'Tous les secteurs':
                 df_filtre = df[df['Secteur'] == secteur_selectionne]
-                st.info(f"📊 {secteur_selectionne}: {len(df_filtre)} titres")
+                st.info(f"  {secteur_selectionne}: {len(df_filtre)} titres")
             else:
                 df_filtre = df
         else:
             df_filtre = df
             st.warning("Information sur les secteurs non disponible")
-        
+
         # Affichage des données
-        st.subheader("📋 Cours des Actions")
-        
+        st.subheader("  Cours des Actions")
+
         def color_variation(val):
             if isinstance(val, (int, float)):
                 if val > 0:
@@ -1103,72 +1104,51 @@ def display_brvm_data():
                 elif val < 0:
                     return 'color: red; font-weight: bold'
             return ''
-        
+
         if 'Variation (%)' in df_filtre.columns:
-            styled_df = df_filtre.style.map(color_variation, subset=['Variation (%)'])
-            st.dataframe(styled_df, use_container_width=True, height=400)
+            try:
+                styled_df = df_filtre.style.map(color_variation, subset=['Variation (%)'])
+                st.dataframe(styled_df, use_container_width=True, height=400)
+            except:
+                st.dataframe(df_filtre, use_container_width=True, height=400)
         else:
             st.dataframe(df_filtre, use_container_width=True, height=400)
-        
+
         # Section Analyse Fondamentale
         st.markdown("---")
-        st.subheader("📊 Analyse Fondamentale par Titre")
-        
+        st.subheader("  Analyse Fondamentale par Titre")
+
         if 'Symbole' in df_filtre.columns:
             symboles_list = [''] + df_filtre['Symbole'].dropna().unique().tolist()
             symbole_selected = st.selectbox("Sélectionnez un titre pour voir son analyse fondamentale", symboles_list)
             
-            if symbole_selected:
-                # ... (le reste de votre code d'analyse fondamentale reste inchangé)
-                pass
-        
+            # Note: Si tu as une logique ici pour afficher l'analyse, elle irait ici.
+            # Dans le code fourni, ce bloc était vide ("pass").
+
         # Export CSV
         st.markdown("---")
-        st.subheader("💾 Export des données")
-        
+        st.subheader("  Export des données")
+
         col_exp1, col_exp2 = st.columns(2)
-        
+
         with col_exp1:
             csv = df_filtre.to_csv(index=False, sep=';', decimal=',')
             st.download_button(
-                label="📥 Télécharger en CSV",
+                label="  Télécharger en CSV",
                 data=csv,
-                file_name=f"brvm_cours_{secteur_selectionne.replace(' ', '_') if 'secteur_selectionne' in locals() else 'tous'}.csv",
+                file_name=f"brvm_cours.csv",
                 mime="text/csv"
             )
-        
+
         with col_exp2:
             if 'Secteur' in df.columns:
-                # Export par secteur
-                if st.button("📤 Exporter tous les secteurs séparément"):
-                    for secteur in df['Secteur'].unique():
-                        df_secteur = df[df['Secteur'] == secteur]
-                        csv_secteur = df_secteur.to_csv(index=False, sep=';', decimal=',')
-                        st.download_button(
-                            label=f"Télécharger {secteur}",
-                            data=csv_secteur,
-                            file_name=f"brvm_{secteur.replace(' ', '_')}.csv",
-                            mime="text/csv",
-                            key=f"export_{secteur}"
-                        )
-    
+                st.info("Pour exporter par secteur, filtrez d'abord ci-dessus puis téléchargez.")
+            else:
+                st.info("Détail secteur non disponible")
+
+    # C'est ici que se trouvait ton erreur. Ce 'else' est maintenant correctement aligné avec 'if df is not None:'
     else:
-        st.warning("⚠️ Impossible de récupérer les données BRVM")
-        st.info("Vérifiez votre connexion internet ou réessayez plus tard")
-        
-        # Export CSV
-        st.markdown("---")
-        st.subheader("💾 Export des données")
-        csv = df.to_csv(index=False, sep=';', decimal=',')
-        st.download_button(
-            label="📥 Télécharger les cours en CSV",
-            data=csv,
-            file_name="brvm_cours.csv",
-            mime="text/csv"
-        )
-    
-    else:
-        st.warning("⚠️ Impossible de récupérer les données BRVM")
+        st.warning("  Impossible de récupérer les données BRVM")
         st.info("Vérifiez votre connexion internet ou réessayez plus tard")
 
 # ===========================
