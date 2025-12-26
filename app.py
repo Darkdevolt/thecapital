@@ -468,6 +468,98 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=5
         'projections': projections,
         'methode': '40% TCAM + 60% Régression Linéaire'
     }
+
+# ===========================
+# FONCTIONS DE SCRAPING BRVM
+# ===========================
+
+@st.cache_data(ttl=300)
+def scrape_brvm_data():
+    """Fonction pour scraper les données du site BRVM"""
+    url = "https://www.brvm.org/fr/cours-actions/0"
+    
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        
+        if response.status_code != 200:
+            return None
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        table = None
+        for t in soup.find_all('table'):
+            headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
+            if 'Symbole' in headers_list and 'Nom' in headers_list:
+                table = t
+                break
+        
+        if not table:
+            tables = soup.find_all('table')
+            if tables:
+                table = tables[0]
+        
+        if not table:
+            return None
+        
+        headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
+        
+        if not headers_list:
+            headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                      'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
+        
+        data = []
+        for row in table.find_all('tr'):
+            cells = row.find_all(['td', 'th'])
+            if cells and cells[0].name == 'td':
+                row_data = [cell.get_text(strip=True) for cell in cells]
+                
+                if len(row_data) >= 6:
+                    if len(row_data) < len(headers_list):
+                        row_data.extend([''] * (len(headers_list) - len(row_data)))
+                    elif len(row_data) > len(headers_list):
+                        row_data = row_data[:len(headers_list)]
+                    
+                    data.append(row_data)
+        
+        if not data:
+            return None
+        
+        df = pd.DataFrame(data, columns=headers_list)
+        df_clean = clean_dataframe(df)
+        
+        return df_clean
+        
+    except Exception as e:
+        return None
+
+def clean_dataframe(df):
+    """Nettoyer et formater le DataFrame"""
+    df = df.copy()
+    df.columns = [col.strip() for col in df.columns]
+    
+    numeric_columns = []
+    for col in df.columns:
+        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation']):
+            numeric_columns.append(col)
+    
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace(',', '.')
+            df[col] = df[col].str.replace(' ', '')
+            if 'Variation' in col:
+                df[col] = df[col].str.replace('%', '')
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    if 'Symbole' in df.columns:
+        df = df.sort_values('Symbole').reset_index(drop=True)
+    
+    return df
+
 # ===========================
 # SECTION DÉVELOPPEUR
 # ===========================
@@ -739,7 +831,7 @@ def developer_section():
                 'variation_tresorerie': variation_tresorerie
             }
         
-with tab4:
+        with tab4:
             st.markdown("### 📊 RATIOS FINANCIERS CALCULÉS AUTOMATIQUEMENT")
             
             # Calculer les ratios
@@ -904,97 +996,6 @@ with tab4:
                 st.caption(f"Total: {len(saved_data)} enregistrements dans Supabase")
         else:
             st.info("Aucune donnée financière sauvegardée dans le cloud")
-
-# ===========================
-# FONCTIONS DE SCRAPING BRVM
-# ===========================
-
-@st.cache_data(ttl=300)
-def scrape_brvm_data():
-    """Fonction pour scraper les données du site BRVM"""
-    url = "https://www.brvm.org/fr/cours-actions/0"
-    
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        }
-        
-        response = requests.get(url, headers=headers, timeout=15, verify=False)
-        
-        if response.status_code != 200:
-            return None
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        table = None
-        for t in soup.find_all('table'):
-            headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
-            if 'Symbole' in headers_list and 'Nom' in headers_list:
-                table = t
-                break
-        
-        if not table:
-            tables = soup.find_all('table')
-            if tables:
-                table = tables[0]
-        
-        if not table:
-            return None
-        
-        headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
-        
-        if not headers_list:
-            headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                      'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
-        
-        data = []
-        for row in table.find_all('tr'):
-            cells = row.find_all(['td', 'th'])
-            if cells and cells[0].name == 'td':
-                row_data = [cell.get_text(strip=True) for cell in cells]
-                
-                if len(row_data) >= 6:
-                    if len(row_data) < len(headers_list):
-                        row_data.extend([''] * (len(headers_list) - len(row_data)))
-                    elif len(row_data) > len(headers_list):
-                        row_data = row_data[:len(headers_list)]
-                    
-                    data.append(row_data)
-        
-        if not data:
-            return None
-        
-        df = pd.DataFrame(data, columns=headers_list)
-        df_clean = clean_dataframe(df)
-        
-        return df_clean
-        
-    except Exception as e:
-        return None
-
-def clean_dataframe(df):
-    """Nettoyer et formater le DataFrame"""
-    df = df.copy()
-    df.columns = [col.strip() for col in df.columns]
-    
-    numeric_columns = []
-    for col in df.columns:
-        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation']):
-            numeric_columns.append(col)
-    
-    for col in numeric_columns:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '.')
-            df[col] = df[col].str.replace(' ', '')
-            if 'Variation' in col:
-                df[col] = df[col].str.replace('%', '')
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    if 'Symbole' in df.columns:
-        df = df.sort_values('Symbole').reset_index(drop=True)
-    
-    return df
 
 def display_brvm_data():
     """Afficher les données BRVM avec analyse fondamentale"""
