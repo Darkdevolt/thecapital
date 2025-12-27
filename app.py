@@ -9,7 +9,7 @@ from supabase import create_client
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import urllib3
-   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings('ignore')
 
 # Configuration
