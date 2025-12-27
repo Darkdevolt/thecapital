@@ -550,69 +550,99 @@ def scrape_brvm_cours():
 # SCRAPING SECTEURS BRVM
 # ===========================
 @st.cache_data(ttl=3600)
-def scrape_brvm_secteurs():
+@st.cache_data(ttl=300)
+def scrape_brvm_cours():
     """
-    Récupère les données par secteur depuis BRVM
+    Récupère les cours depuis BRVM - Version robuste
     """
-    secteurs = {
-        194: "Consommation de Base",
-        195: "Consommation Cyclique",
-        196: "Financier",
-        197: "Industriel",
-        198: "Services Publics",
-        199: "Technologie",
-        200: "Autres"
-    }
+    url = "https://www.brvm.org/fr/cours-actions/0"
     
-    all_data = []
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    }
-    
-    # Désactivation warnings SSL
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
-    for secteur_id, secteur_nom in secteurs.items():
-        url = f"https://www.brvm.org/fr/cours-actions/{secteur_id}"
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'fr-FR,fr;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        }
         
-        try:
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
-            
-            if response.status_code != 200:
-                continue
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            table = soup.find('table')
-            
-            if not table:
-                continue
-            
-            # Extraction des lignes
-            for row in table.find_all('tr')[1:]:  # Skip header
-                cells = row.find_all('td')
-                if cells and len(cells) >= 2:
-                    row_data = [cell.get_text(strip=True) for cell in cells]
-                    row_data.append(secteur_nom)  # Ajouter secteur
-                    all_data.append(row_data)
+        # Désactivation warnings SSL
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
-        except:
-            continue
+        # Requête avec retry
+        session = requests.Session()
+        session.mount('https://', requests.adapters.HTTPAdapter(max_retries=3))
+        
+        response = session.get(url, headers=headers, timeout=20, verify=False)
+        response.raise_for_status()
+        
+        # Parser HTML
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Debugging : afficher la structure
+        tables = soup.find_all('table')
+        
+        if not tables:
+            st.error(f"❌ Aucun tableau trouvé. Status: {response.status_code}")
+            st.info(f"Contenu récupéré : {len(response.content)} octets")
+            return None
+        
+        # Prendre le premier tableau contenant des données
+        table = None
+        for t in tables:
+            rows = t.find_all('tr')
+            if len(rows) > 1:  # Au moins header + 1 ligne
+                table = t
+                break
+        
+        if not table:
+            st.error("❌ Aucun tableau valide trouvé")
+            return None
+        
+        # Extraction des données
+        rows = table.find_all('tr')
+        
+        # En-têtes
+        headers_row = rows[0]
+        headers_list = [th.get_text(strip=True) for th in headers_row.find_all(['th', 'td'])]
+        
+        # Données
+        data = []
+        for row in rows[1:]:
+            cells = row.find_all(['td', 'th'])
+            if cells:
+                row_data = [cell.get_text(strip=True) for cell in cells]
+                if len(row_data) >= 2:  # Au moins Symbole + Nom
+                    data.append(row_data)
+        
+        if not data:
+            st.error("❌ Aucune donnée extraite du tableau")
+            return None
+        
+        # Créer DataFrame
+        # Ajuster le nombre de colonnes
+        max_cols = max(len(row) for row in data)
+        if len(headers_list) < max_cols:
+            headers_list.extend([f'Col_{i}' for i in range(len(headers_list), max_cols)])
+        
+        df = pd.DataFrame(data, columns=headers_list[:max_cols])
+        
+        # Nettoyage
+        df = clean_dataframe(df)
+        
+        st.success(f"✅ {len(df)} titres chargés depuis BRVM")
+        return df
     
-    if not all_data:
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Erreur de connexion : {str(e)}")
         return None
-    
-    # Créer DataFrame avec secteur
-    colonnes = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 
-                'Variation (%)', 'Secteur']
-    
-    df = pd.DataFrame(all_data, columns=colonnes[:len(all_data[0])])
-    df = clean_dataframe(df)
-    
-    return df
+    except Exception as e:
+        st.error(f"❌ Erreur scraping : {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        return None
 
 # ===========================
 # NAVIGATION STYLÉE
