@@ -485,26 +485,23 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # ===========================
 
 # ===========================
-# SCRAPING BRVM - COURS SEULEMENT
+# SCRAPING BRVM - COURS UNIQUEMENT
 # ===========================
 @st.cache_data(ttl=300)
-def scrape_brvm_data():
+def scrape_brvm_cours():
     """
-    Récupère uniquement les cours des actions depuis la BRVM
-    Sans distinction de secteurs
+    Récupère UNIQUEMENT les cours depuis BRVM
+    URL principale sans distinction de secteur
     """
     url = "https://www.brvm.org/fr/cours-actions/0"
     
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
         }
         
-        # Désactivation de la vérification SSL (car certificat BRVM problématique)
+        # Désactivation warnings SSL
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
@@ -516,204 +513,470 @@ def scrape_brvm_data():
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Recherche du tableau contenant les cours
-        table = None
-        for t in soup.find_all('table'):
-            headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
-            if 'Symbole' in headers_list and 'Nom' in headers_list:
-                table = t
-                break
+        # Trouver le tableau
+        table = soup.find('table')
         
         if not table:
-            tables = soup.find_all('table')
-            if tables:
-                table = tables[0]
-        
-        if not table:
-            st.error("❌ Aucun tableau trouvé sur la page BRVM")
+            st.error("❌ Aucun tableau trouvé")
             return None
         
         # Extraction des en-têtes
         headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
-        if not headers_list:
-            headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                           'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
         
-        # Extraction des données
+        # Extraction des lignes
         data = []
-        for row in table.find_all('tr'):
-            cells = row.find_all(['td', 'th'])
-            if cells and cells[0].name == 'td':
+        for row in table.find_all('tr')[1:]:  # Skip header
+            cells = row.find_all('td')
+            if cells and len(cells) >= 2:
                 row_data = [cell.get_text(strip=True) for cell in cells]
-                if len(row_data) >= 6:
-                    # Ajustement si nécessaire
-                    if len(row_data) < len(headers_list):
-                        row_data.extend([''] * (len(headers_list) - len(row_data)))
-                    elif len(row_data) > len(headers_list):
-                        row_data = row_data[:len(headers_list)]
-                    
-                    data.append(row_data)
+                data.append(row_data)
         
         if not data:
-            st.error("❌ Aucune donnée extraite du tableau")
+            st.error("❌ Aucune donnée extraite")
             return None
         
-        # Création du DataFrame
-        df = pd.DataFrame(data, columns=headers_list)
+        # Créer DataFrame
+        df = pd.DataFrame(data, columns=headers_list[:len(data[0])])
         df = clean_dataframe(df)
         
-        # Suppression des doublons par symbole
-        if 'Symbole' in df.columns:
-            df = df.drop_duplicates(subset='Symbole', keep='first')
-        
-        st.success(f"✅ {len(df)} titres récupérés depuis BRVM")
         return df
     
-    except requests.RequestException as e:
-        st.error(f"❌ Erreur de connexion BRVM : {str(e)}")
-        return None
     except Exception as e:
-        st.error(f"❌ Erreur scraping BRVM : {str(e)}")
+        st.error(f"❌ Erreur : {str(e)}")
         return None
 
 
 # ===========================
-# SCRAPING SECTEURS - RICHBOURSE
+# SCRAPING SECTEURS BRVM
 # ===========================
 @st.cache_data(ttl=3600)
-def scrape_secteurs_brvm():
+def scrape_brvm_secteurs():
     """
-    Récupère les secteurs des sociétés directement depuis BRVM
-    Parcourt tous les secteurs disponibles
+    Récupère les données par secteur depuis BRVM
     """
-    # Liste des secteurs BRVM avec leurs IDs
-    secteurs_brvm = [
-        (194, "Consommation de Base"),
-        (195, "Consommation Cyclique"),
-        (196, "Financier"),
-        (197, "Industriel"),
-        (198, "Services Publics"),
-        (199, "Technologie"),
-        (200, "Autres")
-    ]
+    secteurs = {
+        194: "Consommation de Base",
+        195: "Consommation Cyclique",
+        196: "Financier",
+        197: "Industriel",
+        198: "Services Publics",
+        199: "Technologie",
+        200: "Autres"
+    }
     
     all_data = []
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Connection': 'keep-alive',
     }
     
     # Désactivation warnings SSL
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
-    for secteur_id, secteur_nom in secteurs_brvm:
+    for secteur_id, secteur_nom in secteurs.items():
         url = f"https://www.brvm.org/fr/cours-actions/{secteur_id}"
         
         try:
             response = requests.get(url, headers=headers, timeout=15, verify=False)
             
             if response.status_code != 200:
-                st.warning(f"⚠️ Secteur {secteur_nom} inaccessible (HTTP {response.status_code})")
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Recherche du tableau
-            table = None
-            for t in soup.find_all('table'):
-                headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
-                if 'Symbole' in headers_list:
-                    table = t
-                    break
+            table = soup.find('table')
             
             if not table:
-                tables = soup.find_all('table')
-                if tables:
-                    table = tables[0]
-            
-            if not table:
-                st.warning(f"⚠️ Aucun tableau trouvé pour {secteur_nom}")
                 continue
             
-            # Extraction des en-têtes
-            headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
-            if not headers_list:
-                headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                               'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
-            
-            # Extraction des données
-            secteur_data_count = 0
-            for row in table.find_all('tr'):
-                cells = row.find_all(['td', 'th'])
-                if cells and cells[0].name == 'td':
+            # Extraction des lignes
+            for row in table.find_all('tr')[1:]:  # Skip header
+                cells = row.find_all('td')
+                if cells and len(cells) >= 2:
                     row_data = [cell.get_text(strip=True) for cell in cells]
-                    
-                    if len(row_data) >= 2:  # Au moins Symbole et Nom
-                        # Ajustement longueur
-                        if len(row_data) < len(headers_list):
-                            row_data.extend([''] * (len(headers_list) - len(row_data)))
-                        elif len(row_data) > len(headers_list):
-                            row_data = row_data[:len(headers_list)]
-                        
-                        # Ajout du secteur
-                        row_data.append(secteur_nom)
-                        all_data.append(row_data)
-                        secteur_data_count += 1
-            
-            if secteur_data_count > 0:
-                st.success(f"✅ {secteur_nom} : {secteur_data_count} sociétés")
+                    row_data.append(secteur_nom)  # Ajouter secteur
+                    all_data.append(row_data)
         
-        except requests.RequestException as e:
-            st.warning(f"⚠️ Erreur connexion {secteur_nom} : {str(e)}")
-            continue
-        except Exception as e:
-            st.warning(f"⚠️ Erreur traitement {secteur_nom} : {str(e)}")
+        except:
             continue
     
     if not all_data:
-        st.error("❌ Aucune donnée secteur récupérée")
         return None
     
-    # Création du DataFrame
-    # On ajoute 'Secteur' aux colonnes
-    if headers_list:
-        colonnes = headers_list + ['Secteur']
+    # Créer DataFrame avec secteur
+    colonnes = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 
+                'Variation (%)', 'Secteur']
+    
+    df = pd.DataFrame(all_data, columns=colonnes[:len(all_data[0])])
+    df = clean_dataframe(df)
+    
+    return df
+
+# ===========================
+# NAVIGATION STYLÉE
+# ===========================
+def render_navigation():
+    """
+    Barre de navigation stylée en haut de page
+    """
+    st.markdown("""
+        <style>
+        .nav-container {
+            background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%);
+            padding: 1rem 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .nav-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+        .nav-links {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .nav-button {
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 0.6rem 1.5rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+            cursor: pointer;
+        }
+        .nav-button:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+            border-color: white;
+            transform: translateY(-2px);
+        }
+        .nav-button.active {
+            background-color: white;
+            color: #1e3c72;
+            border-color: white;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+        <div class="nav-container">
+            <div class="nav-title">📊 Analyse BRVM Pro</div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Boutons de navigation
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        btn_accueil = st.button("🏠 Accueil", use_container_width=True, type="primary" if st.session_state.get('page', 'accueil') == 'accueil' else "secondary")
+        if btn_accueil:
+            st.session_state.page = 'accueil'
+            st.rerun()
+    
+    with col2:
+        btn_cours = st.button("💹 Cours", use_container_width=True, type="primary" if st.session_state.get('page', 'accueil') == 'cours' else "secondary")
+        if btn_cours:
+            st.session_state.page = 'cours'
+            st.rerun()
+    
+    with col3:
+        btn_secteurs = st.button("🏢 Secteurs", use_container_width=True, type="primary" if st.session_state.get('page', 'accueil') == 'secteurs' else "secondary")
+        if btn_secteurs:
+            st.session_state.page = 'secteurs'
+            st.rerun()
+    
+    with col4:
+        btn_analyse = st.button("📈 Analyse", use_container_width=True, type="primary" if st.session_state.get('page', 'accueil') == 'analyse' else "secondary")
+        if btn_analyse:
+            st.session_state.page = 'analyse'
+            st.rerun()
+    
+    with col5:
+        btn_dev = st.button("⚙️ Développeur", use_container_width=True, type="primary" if st.session_state.get('page', 'accueil') == 'dev' else "secondary")
+        if btn_dev:
+            st.session_state.page = 'dev'
+            st.rerun()
+    
+    st.markdown("---")
+
+# ===========================
+# PAGE ACCUEIL
+# ===========================
+def page_accueil():
+    st.title("🏠 Accueil - Analyse BRVM Pro")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        ### 📊 Bienvenue sur Analyse BRVM Pro
+        
+        **Votre outil complet d'analyse de la Bourse Régionale des Valeurs Mobilières**
+        
+        #### Fonctionnalités principales :
+        - 💹 **Cours en temps réel** : Tous les titres BRVM
+        - 🏢 **Analyse par secteur** : 7 secteurs économiques
+        - 📈 **Analyse fondamentale** : Ratios, scores, valorisation
+        - 🔮 **Projections** : Scénarios futurs basés sur l'historique
+        - ⚡ **Alertes** : Détection automatique des risques
+        """)
+    
+    with col2:
+        st.markdown("""
+        ### 🎯 Comment utiliser l'application ?
+        
+        1. **Cours** : Consultez les cours actuels de tous les titres
+        2. **Secteurs** : Analysez les performances par secteur
+        3. **Analyse** : Sélectionnez un titre pour analyse approfondie
+        4. **Développeur** : Saisissez des données financières
+        """)
+        
+        st.info("💡 **Astuce** : Les données sont mises à jour toutes les 5 minutes")
+    
+    # Statistiques rapides
+    st.markdown("---")
+    st.subheader("📊 Statistiques du jour")
+    
+    with st.spinner("Chargement..."):
+        df = scrape_brvm_cours()
+        
+        if df is not None:
+            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+            
+            with col_stat1:
+                st.metric("Titres cotés", len(df))
+            
+            with col_stat2:
+                if 'Variation (%)' in df.columns:
+                    hausse = len(df[df['Variation (%)'] > 0])
+                    st.metric("En hausse", hausse, f"+{hausse}")
+            
+            with col_stat3:
+                if 'Variation (%)' in df.columns:
+                    baisse = len(df[df['Variation (%)'] < 0])
+                    st.metric("En baisse", baisse, f"-{baisse}")
+            
+            with col_stat4:
+                if 'Variation (%)' in df.columns:
+                    stable = len(df[df['Variation (%)'] == 0])
+                    st.metric("Stables", stable)
+
+
+# ===========================
+# PAGE COURS
+# ===========================
+def page_cours():
+    st.title("💹 Cours des Actions BRVM")
+    
+    col_refresh, col_info = st.columns([1, 3])
+    
+    with col_refresh:
+        if st.button("🔄 Actualiser", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    
+    with col_info:
+        st.info("📡 Données en direct depuis BRVM - Actualisation toutes les 5 minutes")
+    
+    with st.spinner("📊 Chargement des cours..."):
+        df = scrape_brvm_cours()
+    
+    if df is not None:
+        # Statistiques
+        st.subheader("📊 Vue d'ensemble")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total titres", len(df))
+        
+        with col2:
+            if 'Variation (%)' in df.columns:
+                hausse = len(df[df['Variation (%)'] > 0])
+                st.metric("En hausse", hausse, delta=f"+{hausse}")
+        
+        with col3:
+            if 'Variation (%)' in df.columns:
+                baisse = len(df[df['Variation (%)'] < 0])
+                st.metric("En baisse", baisse, delta=f"-{baisse}")
+        
+        with col4:
+            if 'Variation (%)' in df.columns:
+                stable = len(df[df['Variation (%)'] == 0])
+                st.metric("Stables", stable)
+        
+        # Tableau des cours
+        st.markdown("---")
+        st.subheader("📈 Tableau des cours")
+        
+        def color_variation(val):
+            if isinstance(val, (int, float)):
+                if val > 0:
+                    return 'color: green; font-weight: bold'
+                elif val < 0:
+                    return 'color: red; font-weight: bold'
+            return ''
+        
+        if 'Variation (%)' in df.columns:
+            styled_df = df.style.map(color_variation, subset=['Variation (%)'])
+            st.dataframe(styled_df, use_container_width=True, height=500)
+        else:
+            st.dataframe(df, use_container_width=True, height=500)
+        
+        # Top/Flop
+        if 'Variation (%)' in df.columns:
+            st.markdown("---")
+            col_top, col_flop = st.columns(2)
+            
+            with col_top:
+                st.subheader("🔥 Top 5 Hausses")
+                top5 = df.nlargest(5, 'Variation (%)')
+                st.dataframe(top5[['Symbole', 'Nom', 'Variation (%)']].style.map(
+                    color_variation, subset=['Variation (%)']),
+                    use_container_width=True,
+                    hide_index=True
+                )
+            
+            with col_flop:
+                st.subheader("📉 Top 5 Baisses")
+                flop5 = df.nsmallest(5, 'Variation (%)')
+                st.dataframe(flop5[['Symbole', 'Nom', 'Variation (%)']].style.map(
+                    color_variation, subset=['Variation (%)']),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        
+        # Export
+        st.markdown("---")
+        csv = df.to_csv(index=False, sep=';', decimal=',')
+        st.download_button(
+            label="📥 Télécharger en CSV",
+            data=csv,
+            file_name=f"brvm_cours_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv"
+        )
     else:
-        colonnes = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                   'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 
-                   'Variation (%)', 'Secteur']
+        st.error("❌ Impossible de charger les données")
+
+
+# ===========================
+# PAGE SECTEURS
+# ===========================
+def page_secteurs():
+    st.title("🏢 Analyse par Secteur")
     
-    df_secteurs = pd.DataFrame(all_data, columns=colonnes)
+    col_refresh, col_info = st.columns([1, 3])
     
-    # Nettoyage
-    df_secteurs.columns = [col.strip() for col in df_secteurs.columns]
+    with col_refresh:
+        if st.button("🔄 Actualiser", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
     
-    # Suppression des doublons (garder la première occurrence)
-    if 'Symbole' in df_secteurs.columns:
-        df_secteurs = df_secteurs.drop_duplicates(subset='Symbole', keep='first')
+    with col_info:
+        st.info("📊 Classification sectorielle officielle BRVM")
     
-    # Nettoyage des valeurs numériques
-    numeric_columns = []
-    for col in df_secteurs.columns:
-        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation', 'Capitalisation']):
-            numeric_columns.append(col)
+    with st.spinner("📊 Chargement des secteurs..."):
+        df = scrape_brvm_secteurs()
     
-    for col in numeric_columns:
-        if col in df_secteurs.columns:
-            df_secteurs[col] = df_secteurs[col].astype(str).str.replace(',', '.')
-            df_secteurs[col] = df_secteurs[col].str.replace(' ', '')
-            df_secteurs[col] = df_secteurs[col].str.replace('FCFA', '')
-            df_secteurs[col] = df_secteurs[col].str.replace('F', '')
-            df_secteurs[col] = df_secteurs[col].str.replace('CFA', '')
-            df_secteurs[col] = df_secteurs[col].str.replace('%', '')
-            df_secteurs[col] = pd.to_numeric(df_secteurs[col], errors='coerce')
+    if df is not None:
+        # Statistiques par secteur
+        st.subheader("📊 Répartition par secteur")
+        
+        if 'Secteur' in df.columns:
+            secteur_counts = df['Secteur'].value_counts()
+            
+            col_graph, col_table = st.columns([2, 1])
+            
+            with col_graph:
+                import plotly.express as px
+                fig = px.pie(
+                    values=secteur_counts.values,
+                    names=secteur_counts.index,
+                    title='Nombre de sociétés par secteur',
+                    hole=0.4
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col_table:
+                st.markdown("**Détails :**")
+                for secteur, count in secteur_counts.items():
+                    st.metric(secteur, count)
+        
+        # Filtre par secteur
+        st.markdown("---")
+        st.subheader("🔍 Filtrer par secteur")
+        
+        if 'Secteur' in df.columns:
+            secteurs = ['Tous'] + sorted(df['Secteur'].unique().tolist())
+            secteur_selected = st.selectbox("Choisissez un secteur", secteurs)
+            
+            if secteur_selected != 'Tous':
+                df_filtre = df[df['Secteur'] == secteur_selected]
+            else:
+                df_filtre = df
+        else:
+            df_filtre = df
+        
+        # Affichage
+        st.dataframe(df_filtre, use_container_width=True, height=400)
+        
+        # Performance moyenne par secteur
+        if 'Secteur' in df.columns and 'Variation (%)' in df.columns:
+            st.markdown("---")
+            st.subheader("📈 Performance moyenne par secteur")
+            
+            perf = df.groupby('Secteur')['Variation (%)'].agg(['mean', 'count']).reset_index()
+            perf.columns = ['Secteur', 'Variation Moyenne (%)', 'Nombre']
+            perf = perf.sort_values('Variation Moyenne (%)', ascending=False)
+            
+            fig = px.bar(
+                perf,
+                x='Secteur',
+                y='Variation Moyenne (%)',
+                color='Variation Moyenne (%)',
+                color_continuous_scale=['red', 'yellow', 'green'],
+                color_continuous_midpoint=0,
+                title='Performance moyenne par secteur'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("❌ Impossible de charger les données secteurs")
+
+
+# ===========================
+# PAGE ANALYSE
+# ===========================
+def page_analyse():
+    st.title("📈 Analyse Fondamentale")
     
-    st.success(f"✅ Total : {len(df_secteurs)} sociétés classées par secteur")
-    return df_secteurs
+    st.info("💡 Sélectionnez un titre pour voir son analyse complète")
+    
+    financial_data = init_storage()
+    
+    if financial_data:
+        symboles = sorted(set([data['symbole'] for data in financial_data.values() if isinstance(data, dict)]))
+        
+        if symboles:
+            symbole_selected = st.selectbox("Choisissez un titre", [''] + symboles)
+            
+            if symbole_selected:
+                # Votre code d'analyse existant (ratios, piotroski, etc.)
+                st.success(f"Analyse de {symbole_selected}")
+                # ... (code existant pour l'analyse)
+        else:
+            st.warning("Aucune donnée financière disponible")
+    else:
+        st.warning("Aucune donnée financière disponible")
+
 
 # ===========================
 # FONCTION DE FUSION
