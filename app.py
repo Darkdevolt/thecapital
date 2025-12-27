@@ -583,114 +583,137 @@ def scrape_brvm_data():
 @st.cache_data(ttl=3600)
 def scrape_secteurs_brvm():
     """
-    Récupère les secteurs des sociétés depuis Richbourse
-    Combine les pages 1, 2 et 3
+    Récupère les secteurs des sociétés directement depuis BRVM
+    Parcourt tous les secteurs disponibles
     """
-    base_url = "https://www.richbourse.com/common/apprendre/liste-societes?page="
-    pages = [1, 2, 3]
+    # Liste des secteurs BRVM avec leurs IDs
+    secteurs_brvm = [
+        (194, "Consommation de Base"),
+        (195, "Consommation Cyclique"),
+        (196, "Financier"),
+        (197, "Industriel"),
+        (198, "Services Publics"),
+        (199, "Technologie"),
+        (200, "Autres")
+    ]
+    
     all_data = []
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Referer': 'https://www.richbourse.com/',
+        'Connection': 'keep-alive',
     }
     
     # Désactivation warnings SSL
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
-    for page_num in pages:
-        url = f"{base_url}{page_num}"
+    for secteur_id, secteur_nom in secteurs_brvm:
+        url = f"https://www.brvm.org/fr/cours-actions/{secteur_id}"
         
         try:
-            response = requests.get(url, headers=headers, timeout=15, verify=True)
+            response = requests.get(url, headers=headers, timeout=15, verify=False)
             
             if response.status_code != 200:
-                st.warning(f"⚠️ Page {page_num} inaccessible (HTTP {response.status_code})")
+                st.warning(f"⚠️ Secteur {secteur_nom} inaccessible (HTTP {response.status_code})")
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # Recherche du tableau
-            table = soup.find('table')
+            table = None
+            for t in soup.find_all('table'):
+                headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
+                if 'Symbole' in headers_list:
+                    table = t
+                    break
             
             if not table:
-                st.warning(f"⚠️ Aucun tableau trouvé sur page {page_num}")
+                tables = soup.find_all('table')
+                if tables:
+                    table = tables[0]
+            
+            if not table:
+                st.warning(f"⚠️ Aucun tableau trouvé pour {secteur_nom}")
                 continue
             
             # Extraction des en-têtes
-            headers_list = []
-            thead = table.find('thead')
-            if thead:
-                headers_list = [th.get_text(strip=True) for th in thead.find_all('th')]
-            else:
-                # Fallback : première ligne
-                first_row = table.find('tr')
-                if first_row:
-                    headers_list = [th.get_text(strip=True) for th in first_row.find_all(['th', 'td'])]
-            
+            headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
             if not headers_list:
-                headers_list = ['Symbole', 'Société', 'Secteur', 'Capitalisation']
+                headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                               'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
             
             # Extraction des données
-            tbody = table.find('tbody')
-            rows = tbody.find_all('tr') if tbody else table.find_all('tr')[1:]  # Skip header
-            
-            page_data_count = 0
-            for row in rows:
+            secteur_data_count = 0
+            for row in table.find_all('tr'):
                 cells = row.find_all(['td', 'th'])
-                if cells:
+                if cells and cells[0].name == 'td':
                     row_data = [cell.get_text(strip=True) for cell in cells]
                     
-                    # Ajustement longueur
-                    if len(row_data) < len(headers_list):
-                        row_data.extend([''] * (len(headers_list) - len(row_data)))
-                    elif len(row_data) > len(headers_list):
-                        row_data = row_data[:len(headers_list)]
-                    
-                    all_data.append(row_data)
-                    page_data_count += 1
+                    if len(row_data) >= 2:  # Au moins Symbole et Nom
+                        # Ajustement longueur
+                        if len(row_data) < len(headers_list):
+                            row_data.extend([''] * (len(headers_list) - len(row_data)))
+                        elif len(row_data) > len(headers_list):
+                            row_data = row_data[:len(headers_list)]
+                        
+                        # Ajout du secteur
+                        row_data.append(secteur_nom)
+                        all_data.append(row_data)
+                        secteur_data_count += 1
             
-            if page_data_count > 0:
-                st.success(f"✅ Page {page_num} : {page_data_count} sociétés récupérées")
+            if secteur_data_count > 0:
+                st.success(f"✅ {secteur_nom} : {secteur_data_count} sociétés")
         
         except requests.RequestException as e:
-            st.warning(f"⚠️ Erreur connexion page {page_num} : {str(e)}")
+            st.warning(f"⚠️ Erreur connexion {secteur_nom} : {str(e)}")
             continue
         except Exception as e:
-            st.warning(f"⚠️ Erreur traitement page {page_num} : {str(e)}")
+            st.warning(f"⚠️ Erreur traitement {secteur_nom} : {str(e)}")
             continue
     
     if not all_data:
         st.error("❌ Aucune donnée secteur récupérée")
         return None
     
-    # Création du DataFrame combiné
-    df_secteurs = pd.DataFrame(all_data, columns=headers_list)
+    # Création du DataFrame
+    # On ajoute 'Secteur' aux colonnes
+    if headers_list:
+        colonnes = headers_list + ['Secteur']
+    else:
+        colonnes = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                   'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 
+                   'Variation (%)', 'Secteur']
     
-    # Nettoyage des colonnes
+    df_secteurs = pd.DataFrame(all_data, columns=colonnes)
+    
+    # Nettoyage
     df_secteurs.columns = [col.strip() for col in df_secteurs.columns]
     
-    # Suppression des doublons par symbole
+    # Suppression des doublons (garder la première occurrence)
     if 'Symbole' in df_secteurs.columns:
         df_secteurs = df_secteurs.drop_duplicates(subset='Symbole', keep='first')
     
-    # Nettoyage des valeurs numériques si nécessaire
-    numeric_columns = ['Capitalisation']
+    # Nettoyage des valeurs numériques
+    numeric_columns = []
+    for col in df_secteurs.columns:
+        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation', 'Capitalisation']):
+            numeric_columns.append(col)
+    
     for col in numeric_columns:
         if col in df_secteurs.columns:
             df_secteurs[col] = df_secteurs[col].astype(str).str.replace(',', '.')
             df_secteurs[col] = df_secteurs[col].str.replace(' ', '')
             df_secteurs[col] = df_secteurs[col].str.replace('FCFA', '')
-            df_secteurs[col] = df_secteurs[col].str.replace('Mds', 'e9')
-            df_secteurs[col] = df_secteurs[col].str.replace('M', 'e6')
+            df_secteurs[col] = df_secteurs[col].str.replace('F', '')
+            df_secteurs[col] = df_secteurs[col].str.replace('CFA', '')
+            df_secteurs[col] = df_secteurs[col].str.replace('%', '')
             df_secteurs[col] = pd.to_numeric(df_secteurs[col], errors='coerce')
     
-    st.success(f"✅ Total : {len(df_secteurs)} sociétés avec secteurs")
+    st.success(f"✅ Total : {len(df_secteurs)} sociétés classées par secteur")
     return df_secteurs
-
 
 # ===========================
 # FONCTION DE FUSION
