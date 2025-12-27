@@ -1850,74 +1850,29 @@ def display_brvm_data():
 # ===========================
 
 def main():
-    st.title("📊 Analyse des titres BRVM avec Stockage Cloud")
+    # Initialisation session state
+    if 'page' not in st.session_state:
+        st.session_state.page = 'accueil'
     
-    # Menu de navigation
-    page = st.sidebar.radio(
-        "Navigation",
-        ["🏠 Accueil & Cours", "🔐 Section Développeur", "ℹ️ À propos"]
-    )
+    # Navigation
+    render_navigation()
     
-    if page == "🏠 Accueil & Cours":
-        st.markdown("""
-        ### Application d'analyse BRVM avec Stockage Cloud
-        
-        **Nouveau :** Toutes les données financières sont maintenant stockées dans le cloud (Supabase) et accessibles depuis n'importe où !
-        
-        Cette application vous permet de :
-        - 📈 Consulter les cours en temps réel
-        - 📊 Analyser les données fondamentales des sociétés cotées
-        - 💾 Stocker et partager les analyses financières
-        - 💹 Suivre les variations et performances
-        """)
-        
-        # Afficher les statistiques du cloud
-        financial_data = init_storage()
-        if financial_data:
-            st.sidebar.info(f"📦 {len(financial_data)} analyses stockées dans le cloud")
-        
-        display_brvm_data()
-        
-        st.markdown("---")
-        st.caption("Source : BRVM - https://www.brvm.org | Données stockées dans Supabase | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
-    
-    elif page == "🔐 Section Développeur":
+    # Routing des pages
+    if st.session_state.page == 'accueil':
+        page_accueil()
+    elif st.session_state.page == 'cours':
+        page_cours()
+    elif st.session_state.page == 'secteurs':
+        page_secteurs()
+    elif st.session_state.page == 'analyse':
+        page_analyse()
+    elif st.session_state.page == 'dev':
         developer_section()
     
-    elif page == "ℹ️ À propos":
-        st.header("À propos de cette application")
-        st.markdown("""
-        ### Fonctionnalités principales
-        
-        1. **Scraping des données BRVM** : Récupération automatique des cours
-        2. **Analyse fondamentale** : Calcul des ratios financiers
-        3. **Stockage cloud** : Persistance des données via Supabase
-        4. **Interface développeur** : Gestion des données financières
-        5. **Cours automatiques** : Récupération directe depuis BRVM
-        
-        ### Configuration technique
-        
-        - **Framework** : Streamlit
-        - **Base de données** : Supabase (PostgreSQL)
-        - **Stockage** : 500 Mo gratuit
-        - **Déploiement** : Streamlit Cloud / GitHub
-        
-        ### Instructions de déploiement
-        
-        1. Créez un fichier `requirements.txt` :
-        ```
-        streamlit
-        pandas
-        requests
-        beautifulsoup4
-        supabase
-        scikit-learn
-        numpy
-        ```
-        
-        2. Déployez sur Streamlit Cloud en connectant votre GitHub
-        3. Ajoutez vos secrets Supabase dans les paramètres
-        """)
+    # Footer
+    st.markdown("---")
+    st.caption(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')} | 🔗 Source : BRVM")
+
 
 if __name__ == "__main__":
     main()
