@@ -427,7 +427,7 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # ===========================
 @st.cache_data(ttl=300)
 def scrape_brvm_cours():
-    """Récupère les cours depuis BRVM - Version robuste"""
+    """Récupère les cours depuis BRVM - Version corrigée"""
     url = "https://www.brvm.org/fr/cours-actions/0"
     
     try:
@@ -442,59 +442,93 @@ def scrape_brvm_cours():
         
         session = requests.Session()
         session.mount('https://', requests.adapters.HTTPAdapter(max_retries=3))
-        
-        response = session.get(url, headers=headers, timeout=20, verify=False)
+        response = session.get(url, headers=headers, timeout=30, verify=False)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
+        # Chercher spécifiquement le tableau des cours
+        # Essayons plusieurs stratégies
         tables = soup.find_all('table')
+        
         if not tables:
-            st.error(f"❌ Aucun tableau trouvé. Status: {response.status_code}")
+            st.error("✗ Aucun tableau trouvé sur la page")
             return None
         
-        table = None
-        for t in tables:
-            rows = t.find_all('tr')
-            if len(rows) > 1:
-                table = t
+        # Stratégie 1: Chercher un tableau avec les en-têtes attendus
+        target_table = None
+        for table in tables:
+            # Vérifier si le tableau contient les en-têtes attendus
+            headers_text = table.get_text()
+            if 'Symbole' in headers_text and 'Nom' in headers_text and 'Volume' in headers_text:
+                target_table = table
                 break
         
-        if not table:
-            st.error("❌ Aucun tableau valide trouvé")
+        # Stratégie 2: Si pas trouvé, prendre le plus grand tableau
+        if not target_table and tables:
+            # Trouver le tableau avec le plus de lignes
+            max_rows = 0
+            for table in tables:
+                rows = table.find_all('tr')
+                if len(rows) > max_rows:
+                    max_rows = len(rows)
+                    target_table = table
+        
+        if not target_table:
+            st.error("✗ Tableau des cours non trouvé")
             return None
         
-        rows = table.find_all('tr')
-        headers_row = rows[0]
-        headers_list = [th.get_text(strip=True) for th in headers_row.find_all(['th', 'td'])]
+        # Extraire les en-têtes
+        headers = []
+        header_row = target_table.find('tr')
+        if header_row:
+            header_cells = header_row.find_all(['th', 'td'])
+            headers = [cell.get_text(strip=True) for cell in header_cells]
         
+        # Si pas d'en-têtes trouvés, utiliser les en-têtes par défaut
+        if not headers:
+            headers = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                      'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
+        
+        # Extraire les données
         data = []
-        for row in rows[1:]:
+        rows = target_table.find_all('tr')[1:]  # Saute la première ligne (en-têtes)
+        
+        for row in rows:
             cells = row.find_all(['td', 'th'])
-            if cells:
-                row_data = [cell.get_text(strip=True) for cell in cells]
-                if len(row_data) >= 2:
-                    data.append(row_data)
+            row_data = [cell.get_text(strip=True) for cell in cells]
+            
+            # Nettoyer les données
+            if len(row_data) >= 7:  # Nous attendons au moins 7 colonnes
+                # Supprimer les lignes vides ou de titres
+                if row_data[0] and row_data[0] != 'Toutes' and 'mise à jour' not in row_data[0].lower():
+                    data.append(row_data[:7])  # Prendre les 7 premières colonnes
         
         if not data:
-            st.error("❌ Aucune donnée extraite du tableau")
+            st.error("✗ Aucune donnée extraite du tableau")
             return None
         
-        max_cols = max(len(row) for row in data)
-        if len(headers_list) < max_cols:
-            headers_list.extend([f'Col_{i}' for i in range(len(headers_list), max_cols)])
+        # Créer le DataFrame
+        df = pd.DataFrame(data, columns=headers[:7] if len(headers) >= 7 else headers)
         
-        df = pd.DataFrame(data, columns=headers_list[:max_cols])
+        # Nettoyer le DataFrame
         df = clean_dataframe(df)
         
-        st.success(f"✅ {len(df)} titres chargés depuis BRVM")
+        # Vérifier et renommer les colonnes si nécessaire
+        expected_columns = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                           'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
+        
+        if len(df.columns) >= 7:
+            df.columns = expected_columns[:len(df.columns)]
+        
+        st.success(f"✓ {len(df)} titres chargés depuis BRVM")
         return df
         
     except requests.exceptions.RequestException as e:
-        st.error(f"❌ Erreur de connexion : {str(e)}")
+        st.error(f"✗ Erreur de connexion : {str(e)}")
         return None
     except Exception as e:
-        st.error(f"❌ Erreur scraping : {str(e)}")
+        st.error(f"✗ Erreur scraping : {str(e)}")
         return None
 
 @st.cache_data(ttl=300)
