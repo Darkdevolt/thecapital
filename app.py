@@ -618,6 +618,7 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # ===========================
 
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=300)
 def scrape_brvm_data():
     sectors = [
         ("https://www.brvm.org/fr/cours-actions/0", "Tous les titres"),
@@ -635,23 +636,37 @@ def scrape_brvm_data():
     for url, secteur in sectors:
         try:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Connection': 'keep-alive',
             }
             
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
+            response = requests.get(url, headers=headers, timeout=30, verify=False)
             
             if response.status_code != 200:
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
+            # Chercher le tableau principal
             table = None
-            for t in soup.find_all('table'):
-                headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
-                if 'Symbole' in headers_list and 'Nom' in headers_list:
-                    table = t
-                    break
+            
+            # Essayer différentes méthodes pour trouver le tableau
+            table = soup.find('table', {'id': 'tableCoursActions'})
+            
+            if not table:
+                table = soup.find('table', class_='table')
+            
+            if not table:
+                tables = soup.find_all('table')
+                for t in tables:
+                    # Vérifier si la table a des colonnes pertinentes
+                    headers_list = [th.get_text(strip=True) for th in t.find_all(['th', 'td'])]
+                    headers_text = ' '.join(headers_list)
+                    if any(keyword in headers_text.lower() for keyword in ['symbole', 'nom', 'cours', 'volume']):
+                        table = t
+                        break
             
             if not table:
                 tables = soup.find_all('table')
@@ -661,29 +676,59 @@ def scrape_brvm_data():
             if not table:
                 continue
             
-            headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
+            # Extraire les en-têtes
+            headers_list = []
+            header_row = table.find('thead')
+            if header_row:
+                headers_list = [th.get_text(strip=True) for th in header_row.find_all('th')]
             
+            # Si pas d'en-têtes dans thead, chercher dans la première ligne
             if not headers_list:
-                headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                              'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
+                first_row = table.find('tr')
+                if first_row:
+                    headers_list = [cell.get_text(strip=True) for cell in first_row.find_all(['th', 'td'])]
             
+            # Si toujours pas d'en-têtes, utiliser des en-têtes par défaut
+            if not headers_list or len(headers_list) < 3:
+                headers_list = ['Symbole', 'Nom', 'Dernier', 'Variation', 'Volume', 'Capitalisation']
+            
+            # Extraire les données
             data = []
-            for row in table.find_all('tr'):
+            rows = table.find_all('tr')
+            
+            for row in rows:
                 cells = row.find_all(['td', 'th'])
-                if cells and cells[0].name == 'td':
-                    row_data = [cell.get_text(strip=True) for cell in cells]
+                if cells and cells[0].name == 'td':  # S'assurer que c'est une ligne de données
+                    row_data = []
+                    for cell in cells:
+                        # Nettoyer le texte de chaque cellule
+                        cell_text = cell.get_text(strip=True)
+                        # Supprimer les espaces multiples
+                        cell_text = ' '.join(cell_text.split())
+                        row_data.append(cell_text)
                     
-                    if len(row_data) >= 6:
-                        if len(row_data) < len(headers_list):
-                            row_data.extend([''] * (len(headers_list) - len(row_data)))
-                        elif len(row_data) > len(headers_list):
+                    if len(row_data) >= 3:  # Au moins symbole, nom et un cours
+                        # Ajuster la longueur
+                        if len(row_data) > len(headers_list):
                             row_data = row_data[:len(headers_list)]
+                        elif len(row_data) < len(headers_list):
+                            row_data.extend([''] * (len(headers_list) - len(row_data)))
                         
+                        # Ajouter le secteur
                         row_data.append(secteur)
                         data.append(row_data)
             
             if data:
-                df_sector = pd.DataFrame(data, columns=headers_list + ['Secteur'])
+                # Créer le DataFrame
+                df_sector = pd.DataFrame(data)
+                
+                # Nommer les colonnes (dernière colonne est le secteur)
+                num_columns = min(len(headers_list) + 1, df_sector.shape[1])
+                column_names = headers_list[:num_columns-1] + ['Secteur']
+                df_sector = df_sector.iloc[:, :num_columns]
+                df_sector.columns = column_names
+                
+                # Nettoyer le DataFrame
                 df_sector = clean_dataframe(df_sector)
                 all_data.append(df_sector)
                 
@@ -691,29 +736,47 @@ def scrape_brvm_data():
             continue
     
     if all_data:
+        # Combiner tous les DataFrames
         df_combined = pd.concat(all_data, ignore_index=True)
+        
+        # Supprimer les doublons basés sur le symbole
         if 'Symbole' in df_combined.columns:
             df_combined = df_combined.drop_duplicates(subset='Symbole', keep='first')
+        
+        # Trier par symbole
+        if 'Symbole' in df_combined.columns:
+            df_combined = df_combined.sort_values('Symbole').reset_index(drop=True)
+        
         return df_combined
     else:
-        st.error("❌ Aucune donnée récupérée")
         return None
 
 def clean_dataframe(df):
+    """Nettoie le DataFrame en convertissant les colonnes numériques"""
     df = df.copy()
     if df.empty:
         return df
     
+    # Nettoyer les noms de colonnes
     df.columns = [col.strip() for col in df.columns]
     
+    # Identifier les colonnes numériques par leurs noms
     numeric_columns = []
     for col in df.columns:
-        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation', 'Capitalisation']):
-            numeric_columns.append(col)
+        col_lower = col.lower()
+        if any(keyword in col_lower for keyword in ['cours', 'volume', 'variation', 'capitalisation', 'prix', 'valeur', 'dernier']):
+            # Exclure les colonnes texte
+            if col not in ['Symbole', 'Nom', 'Secteur']:
+                numeric_columns.append(col)
     
+    # Nettoyer et convertir les colonnes numériques
     for col in numeric_columns:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '.')
+            # Convertir en string
+            df[col] = df[col].astype(str)
+            
+            # Nettoyer la chaîne
+            df[col] = df[col].str.replace(',', '.')
             df[col] = df[col].str.replace(' ', '')
             df[col] = df[col].str.replace('FCFA', '')
             df[col] = df[col].str.replace('F', '')
@@ -721,13 +784,30 @@ def clean_dataframe(df):
             df[col] = df[col].str.replace('%', '')
             df[col] = df[col].str.replace('€', '')
             df[col] = df[col].str.replace('$', '')
+            df[col] = df[col].str.replace('XOF', '')
+            df[col] = df[col].str.replace('XAF', '')
+            
+            # Convertir en numérique, en ignorant les erreurs
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    if 'Symbole' in df.columns:
-        df = df.sort_values('Symbole').reset_index(drop=True)
+    # Standardiser les noms de colonnes
+    column_mapping = {
+        'Dernier': 'Cours Clôture (FCFA)',
+        'Cours': 'Cours Clôture (FCFA)',
+        'Clôture': 'Cours Clôture (FCFA)',
+        'Cloture': 'Cours Clôture (FCFA)',
+        'Variation': 'Variation (%)',
+        'Var.': 'Variation (%)',
+        'Vol.': 'Volume'
+    }
+    
+    df.rename(columns=column_mapping, inplace=True)
+    
+    # S'assurer que les colonnes essentielles existent
+    if 'Variation (%)' not in df.columns and 'Var %' in df.columns:
+        df.rename(columns={'Var %': 'Variation (%)'}, inplace=True)
     
     return df
-
 # ===========================
 # SECTION DÉVELOPPEUR
 # ===========================
