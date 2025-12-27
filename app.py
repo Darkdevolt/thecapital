@@ -482,103 +482,239 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # FONCTIONS DE SCRAPING BRVM
 # ===========================
 
+# ===========================
+# SCRAPING BRVM - COURS SEULEMENT
+# ===========================
 @st.cache_data(ttl=300)
 def scrape_brvm_data():
-    """Fonction pour scraper les données du site BRVM (toutes les pages sectorielles)"""
+    """
+    Récupère uniquement les cours des actions depuis la BRVM
+    Sans distinction de secteurs
+    """
+    url = "https://www.brvm.org/fr/cours-actions/0"
     
-    # URLs des différentes pages sectorielles BRVM
-    sectors = [
-        ("https://www.brvm.org/fr/cours-actions/0", "Tous les titres"),
-        ("https://www.brvm.org/fr/cours-actions/194", "Consommation de Base"),
-        ("https://www.brvm.org/fr/cours-actions/195", "Consommation Cyclique"),
-        ("https://www.brvm.org/fr/cours-actions/196", "Financier"),
-        ("https://www.brvm.org/fr/cours-actions/197", "Industriel"),
-        ("https://www.brvm.org/fr/cours-actions/198", "Services Publics"),
-        ("https://www.brvm.org/fr/cours-actions/199", "Technologie"),
-        ("https://www.brvm.org/fr/cours-actions/200", "Autres")
-    ]
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            st.error(f"❌ Erreur HTTP {response.status_code}")
+            return None
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Recherche du tableau contenant les cours
+        table = None
+        for t in soup.find_all('table'):
+            headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
+            if 'Symbole' in headers_list and 'Nom' in headers_list:
+                table = t
+                break
+        
+        if not table:
+            tables = soup.find_all('table')
+            if tables:
+                table = tables[0]
+        
+        if not table:
+            st.error("❌ Aucun tableau trouvé sur la page BRVM")
+            return None
+        
+        # Extraction des en-têtes
+        headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
+        if not headers_list:
+            headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                           'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
+        
+        # Extraction des données
+        data = []
+        for row in table.find_all('tr'):
+            cells = row.find_all(['td', 'th'])
+            if cells and cells[0].name == 'td':
+                row_data = [cell.get_text(strip=True) for cell in cells]
+                if len(row_data) >= 6:
+                    # Ajustement si nécessaire
+                    if len(row_data) < len(headers_list):
+                        row_data.extend([''] * (len(headers_list) - len(row_data)))
+                    elif len(row_data) > len(headers_list):
+                        row_data = row_data[:len(headers_list)]
+                    
+                    data.append(row_data)
+        
+        if not data:
+            st.error("❌ Aucune donnée extraite du tableau")
+            return None
+        
+        # Création du DataFrame
+        df = pd.DataFrame(data, columns=headers_list)
+        df = clean_dataframe(df)
+        
+        # Suppression des doublons par symbole
+        if 'Symbole' in df.columns:
+            df = df.drop_duplicates(subset='Symbole', keep='first')
+        
+        return df
     
+    except requests.RequestException as e:
+        st.error(f"❌ Erreur de connexion BRVM : {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"❌ Erreur scraping BRVM : {str(e)}")
+        return None
+
+
+# ===========================
+# SCRAPING SECTEURS - RICHBOURSE
+# ===========================
+@st.cache_data(ttl=3600)
+def scrape_secteurs_brvm():
+    """
+    Récupère les secteurs des sociétés depuis Richbourse
+    Combine les pages 1, 2 et 3
+    """
+    base_url = "https://www.richbourse.com/common/apprendre/liste-societes?page="
+    pages = [1, 2, 3]
     all_data = []
     
-    for url, secteur in sectors:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+    }
+    
+    for page_num in pages:
+        url = f"{base_url}{page_num}"
+        
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            }
-            
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
+            response = requests.get(url, headers=headers, timeout=15)
             
             if response.status_code != 200:
-                st.warning(f"⚠️ Impossible d'accéder à {secteur}")
+                st.warning(f"⚠️ Page {page_num} inaccessible (HTTP {response.status_code})")
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Rechercher le tableau principal
-            table = None
-            for t in soup.find_all('table'):
-                headers_list = [th.get_text(strip=True) for th in t.find_all('th')]
-                if 'Symbole' in headers_list and 'Nom' in headers_list:
-                    table = t
-                    break
+            # Recherche du tableau
+            table = soup.find('table')
             
             if not table:
-                # Si pas de tableau avec th, prendre le premier tableau
-                tables = soup.find_all('table')
-                if tables:
-                    table = tables[0]
-            
-            if not table:
+                st.warning(f"⚠️ Aucun tableau trouvé sur page {page_num}")
                 continue
             
-            # Extraire les en-têtes
-            headers_list = [th.get_text(strip=True) for th in table.find_all('th')]
+            # Extraction des en-têtes
+            headers_list = []
+            thead = table.find('thead')
+            if thead:
+                headers_list = [th.get_text(strip=True) for th in thead.find_all('th')]
+            else:
+                # Fallback : première ligne
+                first_row = table.find('tr')
+                if first_row:
+                    headers_list = [th.get_text(strip=True) for th in first_row.find_all(['th', 'td'])]
             
             if not headers_list:
-                headers_list = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                              'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
+                headers_list = ['Symbole', 'Société', 'Secteur', 'Capitalisation']
             
-            # Extraire les données
-            data = []
-            for row in table.find_all('tr'):
+            # Extraction des données
+            tbody = table.find('tbody')
+            rows = tbody.find_all('tr') if tbody else table.find_all('tr')[1:]  # Skip header
+            
+            for row in rows:
                 cells = row.find_all(['td', 'th'])
-                if cells and cells[0].name == 'td':
+                if cells:
                     row_data = [cell.get_text(strip=True) for cell in cells]
                     
-                    if len(row_data) >= 6:
-                        if len(row_data) < len(headers_list):
-                            row_data.extend([''] * (len(headers_list) - len(row_data)))
-                        elif len(row_data) > len(headers_list):
-                            row_data = row_data[:len(headers_list)]
-                        
-                        # Ajouter le secteur
-                        row_data.append(secteur)
-                        data.append(row_data)
+                    # Ajustement longueur
+                    if len(row_data) < len(headers_list):
+                        row_data.extend([''] * (len(headers_list) - len(row_data)))
+                    elif len(row_data) > len(headers_list):
+                        row_data = row_data[:len(headers_list)]
+                    
+                    all_data.append(row_data)
             
-            if data:
-                # Créer un DataFrame pour ce secteur
-                df_sector = pd.DataFrame(data, columns=headers_list + ['Secteur'])
-                df_sector = clean_dataframe(df_sector)
-                all_data.append(df_sector)
-                
+            st.success(f"✅ Page {page_num} récupérée : {len(rows)} sociétés")
+        
+        except requests.RequestException as e:
+            st.warning(f"⚠️ Erreur connexion page {page_num} : {str(e)}")
+            continue
         except Exception as e:
-            st.warning(f"❌ Erreur lors du scraping de {secteur}: {str(e)}")
+            st.warning(f"⚠️ Erreur traitement page {page_num} : {str(e)}")
             continue
     
-    if all_data:
-        # Fusionner tous les DataFrames
-        df_combined = pd.concat(all_data, ignore_index=True)
-        
-        # Supprimer les doublons (en gardant la première occurrence)
-        if 'Symbole' in df_combined.columns:
-            df_combined = df_combined.drop_duplicates(subset='Symbole', keep='first')
-        
-        return df_combined
-    else:
-        st.error("❌ Aucune donnée n'a pu être récupérée")
+    if not all_data:
+        st.error("❌ Aucune donnée secteur récupérée")
         return None
+    
+    # Création du DataFrame combiné
+    df_secteurs = pd.DataFrame(all_data, columns=headers_list)
+    
+    # Nettoyage des colonnes
+    df_secteurs.columns = [col.strip() for col in df_secteurs.columns]
+    
+    # Suppression des doublons par symbole
+    if 'Symbole' in df_secteurs.columns:
+        df_secteurs = df_secteurs.drop_duplicates(subset='Symbole', keep='first')
+    
+    # Nettoyage des valeurs numériques si nécessaire
+    numeric_columns = ['Capitalisation']
+    for col in numeric_columns:
+        if col in df_secteurs.columns:
+            df_secteurs[col] = df_secteurs[col].astype(str).str.replace(',', '.')
+            df_secteurs[col] = df_secteurs[col].str.replace(' ', '')
+            df_secteurs[col] = df_secteurs[col].str.replace('FCFA', '')
+            df_secteurs[col] = df_secteurs[col].str.replace('Mds', 'e9')
+            df_secteurs[col] = df_secteurs[col].str.replace('M', 'e6')
+            df_secteurs[col] = pd.to_numeric(df_secteurs[col], errors='coerce')
+    
+    return df_secteurs
 
+
+# ===========================
+# FONCTION DE FUSION
+# ===========================
+def get_brvm_data_with_sectors():
+    """
+    Fusionne les données de cours BRVM avec les secteurs Richbourse
+    """
+    # Récupération des cours
+    df_brvm = scrape_brvm_data()
+    
+    if df_brvm is None:
+        return None
+    
+    # Récupération des secteurs
+    df_secteurs = scrape_secteurs_brvm()
+    
+    if df_secteurs is None:
+        st.warning("⚠️ Secteurs non disponibles - Affichage des cours uniquement")
+        return df_brvm
+    
+    # Fusion sur le symbole
+    if 'Symbole' in df_brvm.columns and 'Symbole' in df_secteurs.columns:
+        # Sélection des colonnes pertinentes des secteurs
+        colonnes_secteurs = ['Symbole']
+        if 'Secteur' in df_secteurs.columns:
+            colonnes_secteurs.append('Secteur')
+        if 'Société' in df_secteurs.columns:
+            colonnes_secteurs.append('Société')
+        
+        df_secteurs_clean = df_secteurs[colonnes_secteurs]
+        
+        # Fusion left pour garder toutes les données BRVM
+        df_combined = df_brvm.merge(df_secteurs_clean, on='Symbole', how='left')
+        
+        # Remplir les secteurs manquants
+        if 'Secteur' in df_combined.columns:
+            df_combined['Secteur'].fillna('Non classé', inplace=True)
+        
+        st.info(f"ℹ️ {len(df_combined)} titres avec secteurs fusionnés")
+        return df_combined
+    
+    return df_brvm
 def clean_dataframe(df):
     """Nettoyer et formater le DataFrame"""
     df = df.copy()
@@ -1116,20 +1252,17 @@ def developer_section():
             st.info("Aucune donnée financière sauvegardée dans le cloud")
 
 def display_brvm_data():
-    """Afficher les données BRVM avec analyse fondamentale"""
-    
     st.sidebar.header("⚙️ Paramètres")
     
     if st.sidebar.button("🔄 Actualiser les données"):
         st.cache_data.clear()
         st.rerun()
     
-    with st.spinner("Récupération des données BRVM..."):
-        df = scrape_brvm_data()
+    with st.spinner("Récupération des données BRVM et secteurs..."):
+        df = get_brvm_data_with_sectors()  # ← Changement ici
     
     if df is not None:
-        # Statistiques générales
-        st.subheader("📈 Statistiques du marché")
+        st.subheader("📊 Statistiques du marché")
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -1153,7 +1286,7 @@ def display_brvm_data():
         
         # Filtre par secteur
         st.markdown("---")
-        st.subheader("🔍 Filtrage par secteur")
+        st.subheader("🏢 Filtrage par secteur")
         
         if 'Secteur' in df.columns:
             secteurs = ['Tous les secteurs'] + sorted(df['Secteur'].dropna().unique().tolist())
@@ -1161,12 +1294,12 @@ def display_brvm_data():
             
             if secteur_selectionne != 'Tous les secteurs':
                 df_filtre = df[df['Secteur'] == secteur_selectionne]
-                st.info(f"📊 {secteur_selectionne}: {len(df_filtre)} titres")
+                st.info(f"📌 {secteur_selectionne}: {len(df_filtre)} titres")
             else:
                 df_filtre = df
         else:
             df_filtre = df
-            st.warning("Information sur les secteurs non disponible")
+            st.warning("Information secteurs non disponible")
         
         # Affichage des données
         st.subheader("📋 Cours des Actions")
