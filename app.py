@@ -549,7 +549,9 @@ def scrape_brvm_cours():
 # ===========================
 # SCRAPING SECTEURS BRVM
 # ===========================
-@st.cache_data(ttl=3600)
+# ===========================
+# SCRAPING BRVM - VERSION CORRIGÉE
+# ===========================
 @st.cache_data(ttl=300)
 def scrape_brvm_cours():
     """
@@ -643,6 +645,46 @@ def scrape_brvm_cours():
         import traceback
         st.code(traceback.format_exc())
         return None
+
+
+# ===========================
+# VERSION ALTERNATIVE - API SI DISPONIBLE
+# ===========================
+@st.cache_data(ttl=300)
+def get_brvm_data_fallback():
+    """
+    Données de test si le scraping échoue
+    À remplacer par vos vraies données ou une API
+    """
+    data = {
+        'Symbole': ['SNTS', 'SGBC', 'BICC', 'ONTBF', 'CABC', 'SDCC', 'SIVC', 'BOAB'],
+        'Nom': ['Sonatel', 'SGB', 'BICICI', 'ONATEL', 'CBAO', 'SODE', 'SIVAC', 'BOA Benin'],
+        'Volume': [1250, 3400, 890, 2100, 1670, 540, 780, 920],
+        'Cours veille (FCFA)': [18500, 7200, 8900, 3450, 6780, 2340, 4560, 5670],
+        'Cours Ouverture (FCFA)': [18500, 7200, 8900, 3450, 6780, 2340, 4560, 5670],
+        'Cours Clôture (FCFA)': [18750, 7100, 9100, 3500, 6850, 2300, 4600, 5700],
+        'Variation (%)': [1.35, -1.39, 2.25, 1.45, 1.03, -1.71, 0.88, 0.53]
+    }
+    
+    df = pd.DataFrame(data)
+    return df
+
+
+# ===========================
+# FONCTION COMBINÉE AVEC FALLBACK
+# ===========================
+def get_brvm_cours():
+    """
+    Essaie de scraper, sinon utilise des données de test
+    """
+    df = scrape_brvm_cours()
+    
+    if df is None or len(df) == 0:
+        st.warning("⚠️ Scraping échoué - Utilisation de données de démonstration")
+        st.info("💡 Vérifiez votre connexion internet ou réessayez plus tard")
+        df = get_brvm_data_fallback()
+    
+    return df
 
 # ===========================
 # NAVIGATION STYLÉE
@@ -815,13 +857,13 @@ def page_cours():
             st.rerun()
     
     with col_info:
-        st.info("📡 Données en direct depuis BRVM - Actualisation toutes les 5 minutes")
+        st.info("📡 Données depuis BRVM - Actualisation toutes les 5 minutes")
     
     with st.spinner("📊 Chargement des cours..."):
-        df = scrape_brvm_cours()
+        df = get_brvm_cours()  # ← Nouvelle fonction avec fallback
     
-    if df is not None:
-        # Statistiques
+    if df is not None and not df.empty:
+        # Reste du code identique...
         st.subheader("📊 Vue d'ensemble")
         col1, col2, col3, col4 = st.columns(4)
         
@@ -843,7 +885,7 @@ def page_cours():
                 stable = len(df[df['Variation (%)'] == 0])
                 st.metric("Stables", stable)
         
-        # Tableau des cours
+        # Tableau
         st.markdown("---")
         st.subheader("📈 Tableau des cours")
         
@@ -869,20 +911,22 @@ def page_cours():
             with col_top:
                 st.subheader("🔥 Top 5 Hausses")
                 top5 = df.nlargest(5, 'Variation (%)')
-                st.dataframe(top5[['Symbole', 'Nom', 'Variation (%)']].style.map(
-                    color_variation, subset=['Variation (%)']),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                if 'Symbole' in top5.columns and 'Nom' in top5.columns:
+                    st.dataframe(top5[['Symbole', 'Nom', 'Variation (%)']].style.map(
+                        color_variation, subset=['Variation (%)']),
+                        use_container_width=True,
+                        hide_index=True
+                    )
             
             with col_flop:
                 st.subheader("📉 Top 5 Baisses")
                 flop5 = df.nsmallest(5, 'Variation (%)')
-                st.dataframe(flop5[['Symbole', 'Nom', 'Variation (%)']].style.map(
-                    color_variation, subset=['Variation (%)']),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                if 'Symbole' in flop5.columns and 'Nom' in flop5.columns:
+                    st.dataframe(flop5[['Symbole', 'Nom', 'Variation (%)']].style.map(
+                        color_variation, subset=['Variation (%)']),
+                        use_container_width=True,
+                        hide_index=True
+                    )
         
         # Export
         st.markdown("---")
@@ -895,6 +939,7 @@ def page_cours():
         )
     else:
         st.error("❌ Impossible de charger les données")
+        st.info("Vérifiez votre connexion internet et réessayez")
 
 
 # ===========================
@@ -1063,23 +1108,33 @@ def get_brvm_data_with_sectors():
     
     return df_brvm
 def clean_dataframe(df):
-    """Nettoyer et formater le DataFrame"""
-    df = df.copy()
+    """
+    Nettoie le DataFrame - Version améliorée
+    """
     if df.empty:
         return df
     
-    df.columns = [col.strip() for col in df.columns]
+    df = df.copy()
     
-    # Identifier les colonnes numériques
+    # Nettoyer les noms de colonnes
+    df.columns = [str(col).strip() for col in df.columns]
+    
+    # Identifier colonnes numériques
+    numeric_keywords = ['Cours', 'Volume', 'Variation', 'Capitalisation', 'Prix', 'Montant']
     numeric_columns = []
+    
     for col in df.columns:
-        if any(keyword in col for keyword in ['Cours', 'Volume', 'Variation', 'Capitalisation']):
+        if any(keyword in str(col) for keyword in numeric_keywords):
             numeric_columns.append(col)
     
-    # Nettoyer les valeurs numériques
+    # Nettoyer colonnes numériques
     for col in numeric_columns:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '.')
+            # Conversion en string
+            df[col] = df[col].astype(str)
+            
+            # Remplacements
+            df[col] = df[col].str.replace(',', '.')
             df[col] = df[col].str.replace(' ', '')
             df[col] = df[col].str.replace('FCFA', '')
             df[col] = df[col].str.replace('F', '')
@@ -1087,13 +1142,16 @@ def clean_dataframe(df):
             df[col] = df[col].str.replace('%', '')
             df[col] = df[col].str.replace('€', '')
             df[col] = df[col].str.replace('$', '')
+            df[col] = df[col].str.replace('+', '')
+            
+            # Conversion numérique
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
+    # Trier par symbole si présent
     if 'Symbole' in df.columns:
         df = df.sort_values('Symbole').reset_index(drop=True)
     
     return df
-
 # ===========================
 # SECTION DÉVELOPPEUR
 # ===========================
