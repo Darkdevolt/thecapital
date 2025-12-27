@@ -617,197 +617,252 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # SCRAPING BRVM
 # ===========================
 
-@st.cache_data(ttl=300)
-@st.cache_data(ttl=300)
-def scrape_brvm_data():
-    sectors = [
-        ("https://www.brvm.org/fr/cours-actions/0", "Tous les titres"),
-        ("https://www.brvm.org/fr/cours-actions/194", "Consommation de Base"),
-        ("https://www.brvm.org/fr/cours-actions/195", "Consommation Cyclique"),
-        ("https://www.brvm.org/fr/cours-actions/196", "Financier"),
-        ("https://www.brvm.org/fr/cours-actions/197", "Industriel"),
-        ("https://www.brvm.org/fr/cours-actions/198", "Services Publics"),
-        ("https://www.brvm.org/fr/cours-actions/199", "Technologie"),
-        ("https://www.brvm.org/fr/cours-actions/200", "Autres")
-    ]
-    
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+import streamlit as st
+
+def scrape_company_sectors_from_richbourse():
+    """
+    Scrape la liste des sociétés et leurs secteurs depuis Richbourse.
+    Retourne un DataFrame avec les colonnes: Symbole, Nom, Secteur, Pays.
+    """
+    base_url = "https://www.richbourse.com/common/apprendre/liste-societes?page="
     all_data = []
     
-    for url, secteur in sectors:
+    # Les pages 1, 2 et 3 contiennent toutes les données (47 sociétés au total)
+    page_numbers = [1, 2, 3]
+    
+    for page_num in page_numbers:
+        url = f"{base_url}{page_num}"
         try:
+            # Configuration de la requête
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Connection': 'keep-alive',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             }
             
-            response = requests.get(url, headers=headers, timeout=30, verify=False)
+            # Désactiver la vérification SSL (à utiliser avec précaution)
+            response = requests.get(url, headers=headers, timeout=15, verify=False)
             
             if response.status_code != 200:
+                st.warning(f"⚠️ Impossible d'accéder à la page {page_num} (Code: {response.status_code})")
                 continue
             
+            # Parser le contenu HTML
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Chercher le tableau principal
-            table = None
-            
-            # Essayer différentes méthodes pour trouver le tableau
-            table = soup.find('table', {'id': 'tableCoursActions'})
-            
-            if not table:
-                table = soup.find('table', class_='table')
-            
-            if not table:
-                tables = soup.find_all('table')
-                for t in tables:
-                    # Vérifier si la table a des colonnes pertinentes
-                    headers_list = [th.get_text(strip=True) for th in t.find_all(['th', 'td'])]
-                    headers_text = ' '.join(headers_list)
-                    if any(keyword in headers_text.lower() for keyword in ['symbole', 'nom', 'cours', 'volume']):
-                        table = t
-                        break
-            
-            if not table:
-                tables = soup.find_all('table')
-                if tables:
-                    table = tables[0]
+            # Rechercher le tableau principal - méthode simplifiée
+            # Sur Richbourse, les données sont dans un tableau simple
+            table = soup.find('table')
             
             if not table:
                 continue
             
-            # Extraire les en-têtes
-            headers_list = []
-            header_row = table.find('thead')
-            if header_row:
-                headers_list = [th.get_text(strip=True) for th in header_row.find_all('th')]
-            
-            # Si pas d'en-têtes dans thead, chercher dans la première ligne
-            if not headers_list:
-                first_row = table.find('tr')
-                if first_row:
-                    headers_list = [cell.get_text(strip=True) for cell in first_row.find_all(['th', 'td'])]
-            
-            # Si toujours pas d'en-têtes, utiliser des en-têtes par défaut
-            if not headers_list or len(headers_list) < 3:
-                headers_list = ['Symbole', 'Nom', 'Dernier', 'Variation', 'Volume', 'Capitalisation']
-            
-            # Extraire les données
-            data = []
-            rows = table.find_all('tr')
+            # Extraire les lignes de données
+            rows = table.find_all('tr')[1:]  # Sauter l'en-tête
             
             for row in rows:
-                cells = row.find_all(['td', 'th'])
-                if cells and cells[0].name == 'td':  # S'assurer que c'est une ligne de données
-                    row_data = []
-                    for cell in cells:
-                        # Nettoyer le texte de chaque cellule
-                        cell_text = cell.get_text(strip=True)
-                        # Supprimer les espaces multiples
-                        cell_text = ' '.join(cell_text.split())
-                        row_data.append(cell_text)
-                    
-                    if len(row_data) >= 3:  # Au moins symbole, nom et un cours
-                        # Ajuster la longueur
-                        if len(row_data) > len(headers_list):
-                            row_data = row_data[:len(headers_list)]
-                        elif len(row_data) < len(headers_list):
-                            row_data.extend([''] * (len(headers_list) - len(row_data)))
+                cells = row.find_all('td')
+                if len(cells) >= 4:  # Doit avoir au moins 4 colonnes
+                    # Extraire les données de chaque cellule
+                    try:
+                        numero = cells[0].get_text(strip=True)
+                        nom = cells[1].get_text(strip=True)
+                        symbole = cells[2].get_text(strip=True)
+                        secteur = cells[3].get_text(strip=True)
+                        pays = cells[4].get_text(strip=True) if len(cells) > 4 else ""
                         
-                        # Ajouter le secteur
-                        row_data.append(secteur)
-                        data.append(row_data)
-            
-            if data:
-                # Créer le DataFrame
-                df_sector = pd.DataFrame(data)
-                
-                # Nommer les colonnes (dernière colonne est le secteur)
-                num_columns = min(len(headers_list) + 1, df_sector.shape[1])
-                column_names = headers_list[:num_columns-1] + ['Secteur']
-                df_sector = df_sector.iloc[:, :num_columns]
-                df_sector.columns = column_names
-                
-                # Nettoyer le DataFrame
-                df_sector = clean_dataframe(df_sector)
-                all_data.append(df_sector)
-                
+                        # S'assurer que le symbole n'est pas vide
+                        if symbole:
+                            all_data.append({
+                                'Symbole': symbole,
+                                'Nom': nom,
+                                'Secteur': secteur,
+                                'Pays': pays
+                            })
+                    except (IndexError, AttributeError) as e:
+                        # Passer à la ligne suivante en cas d'erreur
+                        continue
+                        
         except Exception as e:
+            st.warning(f"⚠️ Erreur sur la page {page_num}: {str(e)[:100]}...")
             continue
     
+    # Créer le DataFrame final
     if all_data:
-        # Combiner tous les DataFrames
-        df_combined = pd.concat(all_data, ignore_index=True)
+        df = pd.DataFrame(all_data)
         
-        # Supprimer les doublons basés sur le symbole
-        if 'Symbole' in df_combined.columns:
-            df_combined = df_combined.drop_duplicates(subset='Symbole', keep='first')
+        # Supprimer les doublons (au cas où)
+        df = df.drop_duplicates(subset='Symbole', keep='first')
         
-        # Trier par symbole
-        if 'Symbole' in df_combined.columns:
-            df_combined = df_combined.sort_values('Symbole').reset_index(drop=True)
+        # Trier par symbole pour plus de clarté
+        df = df.sort_values('Symbole').reset_index(drop=True)
         
-        return df_combined
+        return df
     else:
         return None
 
-def clean_dataframe(df):
-    """Nettoie le DataFrame en convertissant les colonnes numériques"""
-    df = df.copy()
-    if df.empty:
-        return df
+def get_company_sector_mapping():
+    """
+    Crée un dictionnaire de correspondance symbole -> secteur.
+    Utile pour enrichir d'autres données.
+    """
+    df = scrape_company_sectors_from_richbourse()
+    if df is not None and not df.empty:
+        # Créer un dictionnaire {symbole: secteur}
+        sector_mapping = dict(zip(df['Symbole'], df['Secteur']))
+        return sector_mapping
+    else:
+        return {}
+
+# Fonction pour tester et afficher les données dans Streamlit
+def display_richbourse_data():
+    st.title("📊 Données BRVM depuis Richbourse")
     
-    # Nettoyer les noms de colonnes
-    df.columns = [col.strip() for col in df.columns]
+    st.info("""
+    Cette fonction récupère la liste complète des sociétés cotées à la BRVM 
+    avec leur secteur d'activité depuis le site Richbourse.
+    """)
     
-    # Identifier les colonnes numériques par leurs noms
-    numeric_columns = []
-    for col in df.columns:
-        col_lower = col.lower()
-        if any(keyword in col_lower for keyword in ['cours', 'volume', 'variation', 'capitalisation', 'prix', 'valeur', 'dernier']):
-            # Exclure les colonnes texte
-            if col not in ['Symbole', 'Nom', 'Secteur']:
-                numeric_columns.append(col)
-    
-    # Nettoyer et convertir les colonnes numériques
-    for col in numeric_columns:
-        if col in df.columns:
-            # Convertir en string
-            df[col] = df[col].astype(str)
+    if st.button("🔄 Récupérer les données", type="primary"):
+        with st.spinner("Récupération des données depuis Richbourse..."):
+            df = scrape_company_sectors_from_richbourse()
             
-            # Nettoyer la chaîne
-            df[col] = df[col].str.replace(',', '.')
-            df[col] = df[col].str.replace(' ', '')
-            df[col] = df[col].str.replace('FCFA', '')
-            df[col] = df[col].str.replace('F', '')
-            df[col] = df[col].str.replace('CFA', '')
-            df[col] = df[col].str.replace('%', '')
-            df[col] = df[col].str.replace('€', '')
-            df[col] = df[col].str.replace('$', '')
-            df[col] = df[col].str.replace('XOF', '')
-            df[col] = df[col].str.replace('XAF', '')
-            
-            # Convertir en numérique, en ignorant les erreurs
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            if df is not None and not df.empty:
+                st.success(f"✅ {len(df)} sociétés récupérées avec succès!")
+                
+                # Afficher un résumé
+                st.subheader("📈 Résumé des données")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Nombre total de sociétés", len(df))
+                with col2:
+                    st.metric("Nombre de secteurs", df['Secteur'].nunique())
+                with col3:
+                    st.metric("Nombre de pays", df['Pays'].nunique())
+                
+                # Afficher la distribution par secteur
+                st.subheader("📊 Distribution par secteur")
+                sector_counts = df['Secteur'].value_counts()
+                st.bar_chart(sector_counts)
+                
+                # Afficher le tableau complet avec filtres
+                st.subheader("📋 Données complètes")
+                
+                # Filtres
+                col_filter1, col_filter2 = st.columns(2)
+                
+                with col_filter1:
+                    selected_sectors = st.multiselect(
+                        "Filtrer par secteur",
+                        options=df['Secteur'].unique(),
+                        default=df['Secteur'].unique()
+                    )
+                
+                with col_filter2:
+                    selected_countries = st.multiselect(
+                        "Filtrer par pays",
+                        options=df['Pays'].unique(),
+                        default=df['Pays'].unique()
+                    )
+                
+                # Appliquer les filtres
+                filtered_df = df[
+                    df['Secteur'].isin(selected_sectors) & 
+                    df['Pays'].isin(selected_countries)
+                ]
+                
+                # Afficher le tableau filtré
+                st.dataframe(
+                    filtered_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Symbole": st.column_config.TextColumn("Symbole", width=100),
+                        "Nom": st.column_config.TextColumn("Nom", width=250),
+                        "Secteur": st.column_config.TextColumn("Secteur", width=150),
+                        "Pays": st.column_config.TextColumn("Pays", width=100),
+                    }
+                )
+                
+                # Téléchargement des données
+                st.subheader("💾 Télécharger les données")
+                csv = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+                
+                st.download_button(
+                    label="📥 Télécharger en CSV",
+                    data=csv,
+                    file_name="brvm_societes_secteurs.csv",
+                    mime="text/csv",
+                )
+                
+                # Afficher les statistiques par secteur
+                st.subheader("📈 Statistiques détaillées par secteur")
+                sector_stats = df.groupby('Secteur').agg({
+                    'Symbole': 'count',
+                    'Pays': lambda x: x.nunique()
+                }).rename(columns={'Symbole': 'Nombre de sociétés', 'Pays': 'Nombre de pays'})
+                
+                st.dataframe(sector_stats.sort_values('Nombre de sociétés', ascending=False))
+                
+                return df
+            else:
+                st.error("❌ Aucune donnée récupérée. Vérifiez votre connexion internet.")
+                return None
+
+# Pour intégrer dans votre application existante
+def enrich_brvm_data_with_sectors(market_data_df):
+    """
+    Enrichit les données de marché avec les secteurs depuis Richbourse.
+    """
+    # Récupérer les secteurs
+    sector_df = scrape_company_sectors_from_richbourse()
     
-    # Standardiser les noms de colonnes
-    column_mapping = {
-        'Dernier': 'Cours Clôture (FCFA)',
-        'Cours': 'Cours Clôture (FCFA)',
-        'Clôture': 'Cours Clôture (FCFA)',
-        'Cloture': 'Cours Clôture (FCFA)',
-        'Variation': 'Variation (%)',
-        'Var.': 'Variation (%)',
-        'Vol.': 'Volume'
-    }
+    if sector_df is not None and market_data_df is not None:
+        # Vérifier si 'Symbole' existe dans les deux DataFrames
+        if 'Symbole' in market_data_df.columns and 'Symbole' in sector_df.columns:
+            # Fusionner les données
+            enriched_df = pd.merge(
+                market_data_df,
+                sector_df[['Symbole', 'Secteur', 'Pays']],
+                on='Symbole',
+                how='left'  Garder toutes les données de marché même si pas de secteur
+            )
+            return enriched_df
     
-    df.rename(columns=column_mapping, inplace=True)
+    # Si échec, retourner les données originales
+    return market_data_df
+
+# Exemple d'utilisation dans votre app.py
+def example_usage_in_your_app():
+    """
+    Exemple montrant comment intégrer cette fonction dans votre application existante.
+    """
+    # 1. Pour afficher uniquement les secteurs
+    # display_richbourse_data()
     
-    # S'assurer que les colonnes essentielles existent
-    if 'Variation (%)' not in df.columns and 'Var %' in df.columns:
-        df.rename(columns={'Var %': 'Variation (%)'}, inplace=True)
+    # 2. Pour enrichir vos données de cours avec les secteurs
+    # df_cours = votre_fonction_de_scraping_cours()
+    # df_complet = enrich_brvm_data_with_sectors(df_cours)
     
-    return df
+    # 3. Pour obtenir juste le mapping symbole -> secteur
+    # mapping = get_company_sector_mapping()
+    # secteur_snts = mapping.get('SNTS', 'Inconnu')
+    
+    pass
+
+# Pour tester directement
+if __name__ == "__main__":
+    # Test simple
+    df_test = scrape_company_sectors_from_richbourse()
+    if df_test is not None:
+        print(f"✅ {len(df_test)} sociétés récupérées")
+        print(df_test.head())
+        print(f"\nSecteurs uniques: {df_test['Secteur'].unique()}")
+    else:
+        print("❌ Échec de récupération des données")
 # ===========================
 # SECTION DÉVELOPPEUR
 # ===========================
