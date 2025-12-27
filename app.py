@@ -425,48 +425,67 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # ===========================
 # FONCTIONS DE SCRAPING BRVM
 # ===========================
-@st.cache_data(ttl=300)
 def scrape_brvm_cours():
-    """Récupère les cours depuis BRVM - Version corrigée"""
+    """Récupère les cours depuis BRVM - Version robuste et corrigée"""
     url = "https://www.brvm.org/fr/cours-actions/0"
     
     try:
+        # Headers pour simuler un navigateur réel
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
         }
         
+        # Créer une session avec retry
         session = requests.Session()
         session.mount('https://', requests.adapters.HTTPAdapter(max_retries=3))
+        
+        # Désactiver la vérification SSL temporairement (le site BRVM a parfois des problèmes de certificat)
         response = session.get(url, headers=headers, timeout=30, verify=False)
         response.raise_for_status()
         
+        # Vérifier l'encodage
+        if response.encoding != 'utf-8':
+            response.encoding = 'utf-8'
+        
+        # Parser le HTML
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Chercher spécifiquement le tableau des cours
-        # Essayons plusieurs stratégies
+        # Chercher tous les tableaux
         tables = soup.find_all('table')
         
         if not tables:
             st.error("✗ Aucun tableau trouvé sur la page")
             return None
         
-        # Stratégie 1: Chercher un tableau avec les en-têtes attendus
+        # DEBUG: Afficher le nombre de tableaux trouvés
+        st.write(f"DEBUG: {len(tables)} tableaux trouvés")
+        
+        # Chercher le tableau qui contient les données des actions
         target_table = None
-        for table in tables:
-            # Vérifier si le tableau contient les en-têtes attendus
-            headers_text = table.get_text()
-            if 'Symbole' in headers_text and 'Nom' in headers_text and 'Volume' in headers_text:
+        for i, table in enumerate(tables):
+            # Obtenir tout le texte du tableau
+            table_text = table.get_text()
+            
+            # Vérifier si ce tableau ressemble au tableau des cours
+            if ('Symbole' in table_text and 'Nom' in table_text and 
+                'Volume' in table_text and 'Variation' in table_text):
                 target_table = table
+                st.write(f"DEBUG: Tableau {i} sélectionné - ressemble au tableau des cours")
                 break
         
-        # Stratégie 2: Si pas trouvé, prendre le plus grand tableau
-        if not target_table and tables:
-            # Trouver le tableau avec le plus de lignes
+        # Si aucun tableau ne correspond aux critères, prendre le plus grand
+        if not target_table:
+            st.warning("Aucun tableau ne correspond exactement aux critères. Prise du plus grand tableau.")
             max_rows = 0
             for table in tables:
                 rows = table.find_all('tr')
@@ -475,51 +494,106 @@ def scrape_brvm_cours():
                     target_table = table
         
         if not target_table:
-            st.error("✗ Tableau des cours non trouvé")
+            st.error("✗ Aucun tableau valide trouvé")
             return None
+        
+        # Extraire les lignes du tableau
+        rows = target_table.find_all('tr')
+        
+        # Trouver la ligne d'en-tête (chercher les th)
+        header_row = None
+        for row in rows[:3]:  # Chercher dans les 3 premières lignes
+            if row.find('th'):
+                header_row = row
+                break
+        
+        if not header_row:
+            # Si pas de th, prendre la première ligne
+            header_row = rows[0]
         
         # Extraire les en-têtes
         headers = []
-        header_row = target_table.find('tr')
-        if header_row:
-            header_cells = header_row.find_all(['th', 'td'])
-            headers = [cell.get_text(strip=True) for cell in header_cells]
+        for cell in header_row.find_all(['th', 'td']):
+            header_text = cell.get_text(strip=True)
+            headers.append(header_text)
         
-        # Si pas d'en-têtes trouvés, utiliser les en-têtes par défaut
+        # Si pas d'en-têtes, utiliser les en-têtes par défaut
         if not headers:
             headers = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
                       'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
         
         # Extraire les données
         data = []
-        rows = target_table.find_all('tr')[1:]  # Saute la première ligne (en-têtes)
         
-        for row in rows:
+        # Déterminer où commencer les données (après l'en-tête)
+        start_idx = rows.index(header_row) + 1 if header_row in rows else 1
+        
+        for row in rows[start_idx:]:
             cells = row.find_all(['td', 'th'])
             row_data = [cell.get_text(strip=True) for cell in cells]
             
-            # Nettoyer les données
-            if len(row_data) >= 7:  # Nous attendons au moins 7 colonnes
-                # Supprimer les lignes vides ou de titres
-                if row_data[0] and row_data[0] != 'Toutes' and 'mise à jour' not in row_data[0].lower():
-                    data.append(row_data[:7])  # Prendre les 7 premières colonnes
+            # Filtrer les lignes qui ne sont pas des données d'actions
+            # (exclure les lignes avec "Toutes", "Dernière mise à jour", etc.)
+            if (len(row_data) >= 3 and 
+                row_data[0] and 
+                not row_data[0].startswith('Toutes') and 
+                'mise à jour' not in ' '.join(row_data).lower() and
+                not any(x in row_data[0] for x in ['-', '–', '—', '—'])):
+                
+                # Assurer que nous avons le bon nombre de colonnes
+                if len(row_data) < len(headers):
+                    # Compléter avec des valeurs vides
+                    row_data.extend([''] * (len(headers) - len(row_data)))
+                elif len(row_data) > len(headers):
+                    # Tronquer aux headers
+                    row_data = row_data[:len(headers)]
+                
+                data.append(row_data)
         
         if not data:
             st.error("✗ Aucune donnée extraite du tableau")
+            # DEBUG: Afficher les premières lignes pour diagnostic
+            st.write("DEBUG: Premières lignes brutes:")
+            for i, row in enumerate(rows[:10]):
+                st.write(f"Ligne {i}: {[cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]}")
             return None
         
         # Créer le DataFrame
-        df = pd.DataFrame(data, columns=headers[:7] if len(headers) >= 7 else headers)
+        df = pd.DataFrame(data, columns=headers)
         
-        # Nettoyer le DataFrame
-        df = clean_dataframe(df)
+        # Nettoyer les noms de colonnes
+        df.columns = [str(col).strip() for col in df.columns]
         
-        # Vérifier et renommer les colonnes si nécessaire
-        expected_columns = ['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
-                           'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)']
+        # Vérifier et standardiser les noms de colonnes
+        column_mapping = {}
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'symbole' in col_lower:
+                column_mapping[col] = 'Symbole'
+            elif 'nom' in col_lower and 'col' not in col_lower:
+                column_mapping[col] = 'Nom'
+            elif 'volume' in col_lower:
+                column_mapping[col] = 'Volume'
+            elif 'variation' in col_lower:
+                column_mapping[col] = 'Variation (%)'
+            elif 'clôture' in col_lower or 'cloture' in col_lower:
+                if 'ouverture' not in col_lower:
+                    column_mapping[col] = 'Cours Clôture (FCFA)'
+            elif 'ouverture' in col_lower:
+                column_mapping[col] = 'Cours Ouverture (FCFA)'
+            elif 'veille' in col_lower:
+                column_mapping[col] = 'Cours veille (FCFA)'
         
-        if len(df.columns) >= 7:
-            df.columns = expected_columns[:len(df.columns)]
+        # Appliquer le mapping
+        df = df.rename(columns=column_mapping)
+        
+        # Nettoyer les données
+        df = clean_dataframe_brvm(df)
+        
+        # Filtrer les lignes vides ou non valides
+        if 'Symbole' in df.columns:
+            df = df[df['Symbole'].notna() & (df['Symbole'] != '')]
+            df = df[~df['Symbole'].str.contains('mise à jour|mise.a.jour', case=False, na=False)]
         
         st.success(f"✓ {len(df)} titres chargés depuis BRVM")
         return df
@@ -529,7 +603,73 @@ def scrape_brvm_cours():
         return None
     except Exception as e:
         st.error(f"✗ Erreur scraping : {str(e)}")
+        import traceback
+        st.write("DEBUG - Traceback:", traceback.format_exc())
         return None
+
+def clean_dataframe_brvm(df):
+    """Nettoyage spécifique pour les données BRVM"""
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # Colonnes numériques attendues
+    numeric_columns = ['Volume', 'Cours veille (FCFA)', 'Cours Ouverture (FCFA)', 
+                      'Cours Clôture (FCFA)', 'Variation (%)']
+    
+    for col in numeric_columns:
+        if col in df.columns:
+            # Convertir en string
+            df[col] = df[col].astype(str)
+            
+            # Nettoyer spécifiquement pour le format français
+            # Remplacer les espaces de milliers (ex: "1 000" -> "1000")
+            df[col] = df[col].str.replace(' ', '', regex=False)
+            # Remplacer les virgules décimales par des points (ex: "1,5" -> "1.5")
+            df[col] = df[col].str.replace(',', '.', regex=False)
+            # Supprimer les caractères non numériques sauf le point et le signe moins
+            df[col] = df[col].str.replace(r'[^\d\.\-]', '', regex=True)
+            
+            # Convertir en numérique
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # S'assurer que les symboles sont en majuscules
+    if 'Symbole' in df.columns:
+        df['Symbole'] = df['Symbole'].str.upper()
+    
+    # Trier par symbole
+    if 'Symbole' in df.columns:
+        df = df.sort_values('Symbole').reset_index(drop=True)
+    
+    return df
+
+def get_brvm_cours():
+    """Récupère uniquement les données du scraping - pas de données de démonstration"""
+    with st.spinner("🔄 Chargement des données depuis BRVM..."):
+        df = scrape_brvm_cours()
+    
+    if df is None or df.empty:
+        st.error("""
+        ❌ ÉCHEC DU SCRAPING
+        
+        Raisons possibles :
+        1. Le site BRVM est temporairement indisponible
+        2. La structure du site a changé
+        3. Problème de connexion internet
+        
+        Solutions :
+        - Vérifiez votre connexion internet
+        - Visitez https://www.brvm.org/fr/cours-actions/0 pour vérifier si le site est accessible
+        - Réessayez dans quelques minutes
+        - Contactez le support si le problème persiste
+        """)
+        
+        # Retourner un DataFrame vide plutôt que des données de démonstration
+        return pd.DataFrame(columns=['Symbole', 'Nom', 'Volume', 'Cours veille (FCFA)', 
+                                    'Cours Ouverture (FCFA)', 'Cours Clôture (FCFA)', 'Variation (%)'])
+    
+    return df
 
 @st.cache_data(ttl=300)
 def scrape_brvm_secteurs():
