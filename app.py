@@ -1308,12 +1308,23 @@ def developer_section():
 def display_brvm_data():
     st.sidebar.header("⚙️ Paramètres")
     
-    if st.sidebar.button("🔄 Actualiser les données"):
-        st.cache_data.clear()
-        st.rerun()
+    col_refresh1, col_refresh2 = st.sidebar.columns(2)
+    with col_refresh1:
+        if st.button("🔄 Actualiser", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
     
-    with st.spinner("Récupération des données BRVM et secteurs..."):
-        df = get_brvm_data_with_sectors()  # ← Changement ici
+    with col_refresh2:
+        mode_affichage = st.radio("Mode", ["Avec secteurs", "Cours seuls"], 
+                                  label_visibility="collapsed")
+    
+    with st.spinner("📊 Récupération des données BRVM..."):
+        if mode_affichage == "Avec secteurs":
+            df = get_brvm_data_with_sectors()
+        else:
+            df = scrape_brvm_data()
+            if df is not None:
+                df['Secteur'] = 'Tous'
     
     if df is not None:
         st.subheader("📊 Statistiques du marché")
@@ -1338,25 +1349,61 @@ def display_brvm_data():
                 stable = len(df[df['Variation (%)'] == 0])
                 st.metric("Stables", stable)
         
+        # Répartition par secteur
+        if 'Secteur' in df.columns and mode_affichage == "Avec secteurs":
+            st.markdown("---")
+            st.subheader("📈 Répartition par secteur")
+            
+            secteur_counts = df['Secteur'].value_counts()
+            
+            col_sec1, col_sec2 = st.columns([2, 1])
+            
+            with col_sec1:
+                # Graphique en barres
+                import plotly.express as px
+                fig = px.bar(
+                    x=secteur_counts.index,
+                    y=secteur_counts.values,
+                    labels={'x': 'Secteur', 'y': 'Nombre de sociétés'},
+                    title='Nombre de sociétés par secteur',
+                    color=secteur_counts.values,
+                    color_continuous_scale='Viridis'
+                )
+                fig.update_layout(showlegend=False, height=300)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col_sec2:
+                st.markdown("**Distribution :**")
+                for secteur, count in secteur_counts.items():
+                    st.metric(secteur, count)
+        
         # Filtre par secteur
         st.markdown("---")
-        st.subheader("🏢 Filtrage par secteur")
+        st.subheader("🔍 Filtrage par secteur")
         
         if 'Secteur' in df.columns:
             secteurs = ['Tous les secteurs'] + sorted(df['Secteur'].dropna().unique().tolist())
-            secteur_selectionne = st.selectbox("Choisissez un secteur", secteurs)
+            
+            col_filtre1, col_filtre2 = st.columns([3, 1])
+            
+            with col_filtre1:
+                secteur_selectionne = st.selectbox("Choisissez un secteur", secteurs)
+            
+            with col_filtre2:
+                if secteur_selectionne != 'Tous les secteurs':
+                    df_filtre = df[df['Secteur'] == secteur_selectionne]
+                    st.metric("Titres affichés", len(df_filtre))
+                else:
+                    df_filtre = df
+                    st.metric("Titres affichés", len(df_filtre))
             
             if secteur_selectionne != 'Tous les secteurs':
-                df_filtre = df[df['Secteur'] == secteur_selectionne]
-                st.info(f"📌 {secteur_selectionne}: {len(df_filtre)} titres")
-            else:
-                df_filtre = df
+                st.info(f"📌 Secteur : **{secteur_selectionne}** ({len(df_filtre)} sociétés)")
         else:
             df_filtre = df
-            st.warning("Information secteurs non disponible")
         
-        # Affichage des données
-        st.subheader("📋 Cours des Actions")
+        # Affichage du tableau
+        st.subheader("📊 Cours des Actions")
         
         def color_variation(val):
             if isinstance(val, (int, float)):
@@ -1371,6 +1418,52 @@ def display_brvm_data():
             st.dataframe(styled_df, use_container_width=True, height=400)
         else:
             st.dataframe(df_filtre, use_container_width=True, height=400)
+        
+        # Analyse des performances par secteur
+        if 'Secteur' in df_filtre.columns and 'Variation (%)' in df_filtre.columns and len(df_filtre['Secteur'].unique()) > 1:
+            st.markdown("---")
+            st.subheader("📊 Performance moyenne par secteur")
+            
+            perf_secteur = df_filtre.groupby('Secteur')['Variation (%)'].agg(['mean', 'count']).reset_index()
+            perf_secteur.columns = ['Secteur', 'Variation Moyenne (%)', 'Nombre de titres']
+            perf_secteur = perf_secteur.sort_values('Variation Moyenne (%)', ascending=False)
+            
+            col_perf1, col_perf2 = st.columns([2, 1])
+            
+            with col_perf1:
+                fig_perf = px.bar(
+                    perf_secteur,
+                    x='Secteur',
+                    y='Variation Moyenne (%)',
+                    title='Performance moyenne par secteur',
+                    color='Variation Moyenne (%)',
+                    color_continuous_scale=['red', 'yellow', 'green'],
+                    color_continuous_midpoint=0
+                )
+                fig_perf.update_layout(height=300)
+                st.plotly_chart(fig_perf, use_container_width=True)
+            
+            with col_perf2:
+                st.dataframe(
+                    perf_secteur.style.format({
+                        'Variation Moyenne (%)': '{:.2f}%',
+                        'Nombre de titres': '{:.0f}'
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        
+        # Export CSV
+        st.markdown("---")
+        st.subheader("💾 Export des données")
+        
+        csv = df_filtre.to_csv(index=False, sep=';', decimal=',')
+        st.download_button(
+            label="📥 Télécharger en CSV",
+            data=csv,
+            file_name=f"brvm_cours_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv"
+        )
         
         # Section Analyse Fondamentale
         st.markdown("---")
