@@ -618,6 +618,174 @@ rn_values[0] != 0 else 0
 # ===========================
 # SCRAPING BRVM
 # ===========================
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+import streamlit as st
+
+def scrape_company_sectors_from_richbourse():
+    """
+    Scrape la liste des sociétés et leurs secteurs depuis Richbourse.
+    Retourne un DataFrame avec les colonnes: Symbole, Nom, Secteur, Pays.
+    """
+    base_url = "https://www.richbourse.com/common/apprendre/liste-societes?page="
+    all_data = []
+    
+    # Les pages 1, 2 et 3 contiennent toutes les données (47 sociétés au total)
+    page_numbers = [1, 2, 3]
+    
+    for page_num in page_numbers:
+        url = f"{base_url}{page_num}"
+        try:
+            # Configuration de la requête
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            }
+            
+            # Désactiver la vérification SSL
+            response = requests.get(url, headers=headers, timeout=15, verify=False)
+            
+            if response.status_code != 200:
+                st.warning(f"⚠️ Impossible d'accéder à la page {page_num} (Code: {response.status_code})")
+                continue
+            
+            # Parser le contenu HTML
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Rechercher le tableau principal
+            table = soup.find('table')
+            
+            if not table:
+                continue
+            
+            # Extraire les lignes de données
+            rows = table.find_all('tr')[1:]  # Sauter l'en-tête
+            
+            for row in rows:
+                cells = row.find_all('td')
+                if len(cells) >= 4:  # Doit avoir au moins 4 colonnes
+                    # Extraire les données de chaque cellule
+                    try:
+                        numero = cells[0].get_text(strip=True)
+                        nom = cells[1].get_text(strip=True)
+                        symbole = cells[2].get_text(strip=True)
+                        secteur = cells[3].get_text(strip=True)
+                        pays = cells[4].get_text(strip=True) if len(cells) > 4 else ""
+                        
+                        # S'assurer que le symbole n'est pas vide
+                        if symbole:
+                            all_data.append({
+                                'Symbole': symbole,
+                                'Nom': nom,
+                                'Secteur': secteur,
+                                'Pays': pays
+                            })
+                    except (IndexError, AttributeError) as e:
+                        # Passer à la ligne suivante en cas d'erreur
+                        continue
+                        
+        except Exception as e:
+            st.warning(f"⚠️ Erreur sur la page {page_num}: {str(e)[:100]}...")
+            continue
+    
+    # Créer le DataFrame final
+    if all_data:
+        df = pd.DataFrame(all_data)
+        
+        # Supprimer les doublons (au cas où)
+        df = df.drop_duplicates(subset='Symbole', keep='first')
+        
+        # Trier par symbole pour plus de clarté
+        df = df.sort_values('Symbole').reset_index(drop=True)
+        
+        return df
+    else:
+        return None
+
+def get_company_sector_mapping():
+    """
+    Crée un dictionnaire de correspondance symbole -> secteur.
+    Utile pour enrichir d'autres données.
+    """
+    df = scrape_company_sectors_from_richbourse()
+    if df is not None and not df.empty:
+        # Créer un dictionnaire {symbole: secteur}
+        sector_mapping = dict(zip(df['Symbole'], df['Secteur']))
+        return sector_mapping
+    else:
+        return {}
+
+# CORRECTION ICI : La fonction avait une erreur de syntaxe
+def enrich_brvm_data_with_sectors(market_data_df):
+    """
+    Enrichit les données de marché avec les secteurs depuis Richbourse.
+    """
+    # Récupérer les secteurs
+    sector_df = scrape_company_sectors_from_richbourse()
+    
+    if sector_df is not None and market_data_df is not None:
+        # Vérifier si 'Symbole' existe dans les deux DataFrames
+        if 'Symbole' in market_data_df.columns and 'Symbole' in sector_df.columns:
+            # Fusionner les données
+            # Garder toutes les données de marché même si pas de secteur correspondant
+            enriched_df = pd.merge(
+                market_data_df,
+                sector_df[['Symbole', 'Secteur', 'Pays']],
+                on='Symbole',
+                how='left'  # 'left' join pour garder toutes les lignes de market_data_df
+            )
+            return enriched_df
+    
+    # Si échec, retourner les données originales
+    return market_data_df
+
+# Fonction pour intégrer à votre app.py existant
+def integrate_with_existing_app():
+    """
+    Exemple d'intégration dans votre app.py existant
+    """
+    # Dans votre fonction display_brvm_data(), remplacez:
+    # df = scrape_brvm_data()  # Ancienne méthode
+    # Par:
+    
+    # 1. Récupérer les données de cours (si vous avez une fonction qui fonctionne)
+    # df_cours = votre_fonction_scraping_cours()
+    
+    # 2. Enrichir avec les secteurs
+    # df_complet = enrich_brvm_data_with_sectors(df_cours)
+    
+    # OU si vous voulez juste les secteurs:
+    # df_secteurs = scrape_company_sectors_from_richbourse()
+    
+    pass
+
+# Fonction de test
+def test_scraping():
+    """Testez si le scraping fonctionne"""
+    print("Test du scraping Richbourse...")
+    df = scrape_company_sectors_from_richbourse()
+    
+    if df is not None:
+        print(f"✅ {len(df)} sociétés récupérées")
+        print("\nAperçu des données:")
+        print(df.head(10))
+        print(f"\nSecteurs uniques: {df['Secteur'].unique()}")
+        print(f"\nPays uniques: {df['Pays'].unique()}")
+        
+        # Test du mapping
+        mapping = get_company_sector_mapping()
+        print(f"\nMapping exemple - SNTS: {mapping.get('SNTS', 'Non trouvé')}")
+        print(f"Mapping exemple - SGBC: {mapping.get('SGBC', 'Non trouvé')}")
+        
+        return df
+    else:
+        print("❌ Échec de récupération des données")
+        return None
+
+# Pour exécuter le test
+if __name__ == "__main__":
+    test_scraping()
 @st.cache_data(ttl=300)
 def scrape_brvm_data():
  sectors = [
