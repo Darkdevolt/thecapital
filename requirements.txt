@@ -6,3 +6,4 @@ supabase
 scikit-learn
 numpy
 plotly
+urllib3
