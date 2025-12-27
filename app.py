@@ -720,13 +720,25 @@ def scrape_secteurs_brvm():
 # ===========================
 def get_brvm_data_with_sectors():
     """
-    Fusionne les données de cours BRVM avec les secteurs Richbourse
+    Récupère directement les données avec secteurs depuis BRVM
+    Plus besoin de fusion car tout vient de la même source
     """
-    # Récupération des cours
+    # Option 1 : Utiliser directement les données par secteur
+    df_secteurs = scrape_secteurs_brvm()
+    
+    if df_secteurs is not None:
+        return df_secteurs
+    
+    # Fallback : Si les secteurs échouent, récupérer juste les cours
+    st.warning("⚠️ Récupération par secteur échouée, chargement des cours généraux...")
     df_brvm = scrape_brvm_data()
     
-    if df_brvm is None:
-        return None
+    if df_brvm is not None:
+        # Ajouter une colonne secteur par défaut
+        df_brvm['Secteur'] = 'Non classé'
+        return df_brvm
+    
+    return None
     
     # Récupération des secteurs
     df_secteurs = scrape_secteurs_brvm()
