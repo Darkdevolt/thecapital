@@ -8,6 +8,8 @@ from datetime import datetime
 from supabase import create_client
 import numpy as np
 from sklearn.linear_model import LinearRegression
+import urllib3
+   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings('ignore')
 
 # Configuration
@@ -495,11 +497,18 @@ def scrape_brvm_data():
     
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
         }
         
-        response = requests.get(url, headers=headers, timeout=15)
+        # Désactivation de la vérification SSL (car certificat BRVM problématique)
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
         
         if response.status_code != 200:
             st.error(f"❌ Erreur HTTP {response.status_code}")
@@ -557,6 +566,7 @@ def scrape_brvm_data():
         if 'Symbole' in df.columns:
             df = df.drop_duplicates(subset='Symbole', keep='first')
         
+        st.success(f"✅ {len(df)} titres récupérés depuis BRVM")
         return df
     
     except requests.RequestException as e:
@@ -581,16 +591,21 @@ def scrape_secteurs_brvm():
     all_data = []
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': 'https://www.richbourse.com/',
     }
+    
+    # Désactivation warnings SSL
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
     for page_num in pages:
         url = f"{base_url}{page_num}"
         
         try:
-            response = requests.get(url, headers=headers, timeout=15)
+            response = requests.get(url, headers=headers, timeout=15, verify=True)
             
             if response.status_code != 200:
                 st.warning(f"⚠️ Page {page_num} inaccessible (HTTP {response.status_code})")
@@ -623,6 +638,7 @@ def scrape_secteurs_brvm():
             tbody = table.find('tbody')
             rows = tbody.find_all('tr') if tbody else table.find_all('tr')[1:]  # Skip header
             
+            page_data_count = 0
             for row in rows:
                 cells = row.find_all(['td', 'th'])
                 if cells:
@@ -635,8 +651,10 @@ def scrape_secteurs_brvm():
                         row_data = row_data[:len(headers_list)]
                     
                     all_data.append(row_data)
+                    page_data_count += 1
             
-            st.success(f"✅ Page {page_num} récupérée : {len(rows)} sociétés")
+            if page_data_count > 0:
+                st.success(f"✅ Page {page_num} : {page_data_count} sociétés récupérées")
         
         except requests.RequestException as e:
             st.warning(f"⚠️ Erreur connexion page {page_num} : {str(e)}")
@@ -670,6 +688,7 @@ def scrape_secteurs_brvm():
             df_secteurs[col] = df_secteurs[col].str.replace('M', 'e6')
             df_secteurs[col] = pd.to_numeric(df_secteurs[col], errors='coerce')
     
+    st.success(f"✅ Total : {len(df_secteurs)} sociétés avec secteurs")
     return df_secteurs
 
 
