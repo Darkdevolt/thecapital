@@ -68,13 +68,13 @@ def load_symbol_mapping():
         response = supabase.table("symbol_mapping").select("*").execute()
         mapping = {}
         for record in response.data:
-            mapping[record['entreprise_nom']] = record['symbole']
+            mapping[record['symbole']] = record['nom_complet']  # Changé : symbole -> nom_complet
         return mapping
     except Exception as e:
         st.error(f"Erreur de chargement du mapping: {str(e)}")
         return {}
 
-def save_symbol_mapping(entreprise_nom, symbole):
+def save_symbol_mapping(symbole, nom_complet):
     """Sauvegarder un mapping dans Supabase"""
     supabase = init_supabase()
     if not supabase:
@@ -82,22 +82,22 @@ def save_symbol_mapping(entreprise_nom, symbole):
     
     try:
         record = {
-            'entreprise_nom': entreprise_nom,
             'symbole': symbole,
+            'nom_complet': nom_complet,
             'last_update': datetime.now().isoformat()
         }
         
         # Vérifier si l'entrée existe déjà
         existing = supabase.table("symbol_mapping")\
             .select("*")\
-            .eq("entreprise_nom", entreprise_nom)\
+            .eq("symbole", symbole)\
             .execute()
         
         if existing.data:
             # Mise à jour
             response = supabase.table("symbol_mapping")\
                 .update(record)\
-                .eq("entreprise_nom", entreprise_nom)\
+                .eq("symbole", symbole)\
                 .execute()
         else:
             # Insertion
@@ -108,7 +108,7 @@ def save_symbol_mapping(entreprise_nom, symbole):
         st.error(f"Erreur de sauvegarde du mapping: {str(e)}")
         return False
 
-def delete_symbol_mapping(entreprise_nom):
+def delete_symbol_mapping(symbole):
     """Supprimer un mapping de Supabase"""
     supabase = init_supabase()
     if not supabase:
@@ -117,7 +117,7 @@ def delete_symbol_mapping(entreprise_nom):
     try:
         response = supabase.table("symbol_mapping")\
             .delete()\
-            .eq("entreprise_nom", entreprise_nom)\
+            .eq("symbole", symbole)\
             .execute()
         return True
     except Exception as e:
@@ -204,6 +204,7 @@ def delete_financial_data(symbole, annee):
     except Exception as e:
         st.error(f"Erreur de suppression: {str(e)}")
         return False
+
 # ===========================
 # FONCTIONS DE CALCUL DES RATIOS
 # ===========================
@@ -500,7 +501,7 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
     }
 
 # ===========================
-# FONCTIONS DE SCRAPING
+# FONCTIONS DE SCRAPING DES COURS
 # ===========================
 
 @st.cache_data(ttl=300)
@@ -595,21 +596,6 @@ def scrape_brvm():
         st.error(f"Erreur lors du scraping: {str(e)}")
         return None, None
 
-# Fonctions de placeholder pour Sika Finance (à implémenter)
-def get_sika_finance_url(entreprise_nom):
-    """Générer l'URL Sika Finance pour une entreprise"""
-    # À implémenter : logique pour générer l'URL correcte
-    return f"https://www.sikafinance.com/{entreprise_nom.replace(' ', '-').lower()}"
-
-def scrape_sika_finance(url):
-    """Scraper les données financières depuis Sika Finance"""
-    # À implémenter : logique de scraping spécifique à Sika Finance
-    return {
-        'bilan': {},
-        'compte_resultat': {},
-        'flux_tresorerie': {}
-    }
-
 # ===========================
 # NAVIGATION STYLÉE
 # ===========================
@@ -636,42 +622,35 @@ def render_navigation():
     
     st.markdown("""
     <div class="nav-container">
-        <div class="nav-title">  Analyse BRVM Pro</div>
+        <div class="nav-title">📊 Analyse BRVM Pro</div>
     </div>
     """, unsafe_allow_html=True)
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        btn_accueil = st.button("  Accueil", use_container_width=True,
+        btn_accueil = st.button("🏠 Accueil", use_container_width=True,
                                 type="primary" if st.session_state.get('page', 'accueil') == 'accueil' else "secondary")
         if btn_accueil:
             st.session_state.page = 'accueil'
             st.rerun()
     
     with col2:
-        btn_cours = st.button("  Cours", use_container_width=True,
+        btn_cours = st.button("📈 Cours", use_container_width=True,
                              type="primary" if st.session_state.get('page', 'accueil') == 'cours' else "secondary")
         if btn_cours:
             st.session_state.page = 'cours'
             st.rerun()
     
     with col3:
-        btn_secteurs = st.button("  Secteurs", use_container_width=True,
-                                type="primary" if st.session_state.get('page', 'accueil') == 'secteurs' else "secondary")
-        if btn_secteurs:
-            st.session_state.page = 'secteurs'
-            st.rerun()
-    
-    with col4:
-        btn_analyse = st.button("  Analyse", use_container_width=True,
+        btn_analyse = st.button("🔍 Analyse", use_container_width=True,
                                type="primary" if st.session_state.get('page', 'accueil') == 'analyse' else "secondary")
         if btn_analyse:
             st.session_state.page = 'analyse'
             st.rerun()
     
-    with col5:
-        btn_dev = st.button("  Développeur", use_container_width=True,
+    with col4:
+        btn_dev = st.button("⚙️ Développeur", use_container_width=True,
                            type="primary" if st.session_state.get('page', 'accueil') == 'dev' else "secondary")
         if btn_dev:
             st.session_state.page = 'dev'
@@ -683,35 +662,35 @@ def render_navigation():
 # PAGES DE L'APPLICATION
 # ===========================
 def page_accueil():
-    st.title("  Accueil - Analyse BRVM Pro")
+    st.title("🏠 Accueil - Analyse BRVM Pro")
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("""
-        ###   Bienvenue sur Analyse BRVM Pro
+        ### Bienvenue sur Analyse BRVM Pro
         
-        **Votre outil complet d'analyse de la Bourse Régionale des Valeurs Mobilières**
+        **Votre outil d'analyse fondamentale pour la Bourse Régionale des Valeurs Mobilières**
         
-        #### Fonctionnalités principales :
-        - **Analyse fondamentale** : Ratios, scores, valorisation
-        - **Projections** : Scénarios futurs basés sur l'historique
-        - **Alertes** : Détection automatique des risques
-        - **Données Sika Finance** : Importation automatique depuis Sika Finance
+        #### Fonctionnalités :
+        - **📈 Cours en direct** : Données de marché depuis Sika Finance
+        - **🔍 Analyse fondamentale** : Ratios financiers et valorisation
+        - **📊 Projections** : Scénarios futurs basés sur l'historique
+        - **⚖️ Comparaisons sectorielles** : Multiples de valorisation
         """)
     
     with col2:
         st.markdown("""
-        ###   Comment utiliser l'application ?
+        ### Comment utiliser ?
         
-        1. **Développeur** : Configurez les entreprises et importez les données
-        2. **Analyse** : Sélectionnez un titre pour analyse approfondie
-        3. **Données** : Visualisez les données financières importées
+        1. **⚙️ Développeur** : Configurez les entreprises et les données
+        2. **🔍 Analyse** : Sélectionnez un titre pour analyse détaillée
+        3. **📈 Cours** : Suivez les cotations en temps réel
         """)
-        st.info("  **Astuce** : Configurez d'abord vos entreprises dans la section Développeur")
+        st.info("💡 **Conseil** : Commencez par configurer vos entreprises dans la section Développeur")
     
     st.markdown("---")
-    st.subheader("  Statistiques")
+    st.subheader("📊 Statistiques")
     
     financial_data = init_storage()
     if financial_data:
@@ -721,19 +700,19 @@ def page_accueil():
         col_stat1, col_stat2, col_stat3 = st.columns(3)
         
         with col_stat1:
-            st.metric("Entreprises configurées", len(entreprises))
+            st.metric("Entreprises", len(entreprises))
         
         with col_stat2:
             st.metric("Données financières", total_donnees)
         
         with col_stat3:
             if 'symbol_mapping' in st.session_state:
-                st.metric("Mappings de symboles", len(st.session_state.symbol_mapping))
+                st.metric("Noms configurés", len(st.session_state.symbol_mapping))
     else:
         st.info("Aucune donnée financière disponible. Rendez-vous dans la section Développeur pour configurer.")
 
 def page_cours():
-    st.title("  Données de Marché")
+    st.title("📈 Cours des Actions BRVM")
     
     # Scraper et afficher les données
     with st.spinner("Chargement des données de la BRVM..."):
@@ -813,172 +792,174 @@ def page_cours():
     else:
         st.error("❌ Impossible de charger les données. Veuillez réessayer plus tard.")
         st.info("💡 Le site source peut être temporairement indisponible.")
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style='text-align: center; color: #666;'>
-        <small>Données provenant de <a href='https://www.sikafinance.com/marches/aaz' target='_blank'>Sikafinance.com</a> | 
-        Mise à jour automatique toutes les 5 minutes</small>
-    </div>
-    """, unsafe_allow_html=True)
-
-def page_secteurs():
-    st.title("  Analyse par Secteur")
-    
-    st.info("  ⚠️ Cette fonctionnalité nécessite une classification sectorielle")
-    
-    financial_data = init_storage()
-    if financial_data and len(financial_data) > 0:
-        # Créer une classification sectorielle basique
-        st.subheader("  Données financières par entreprise")
-        
-        # Grouper par symbole
-        entreprises_data = {}
-        for key, data in financial_data.items():
-            if isinstance(data, dict):
-                symbole = data.get('symbole')
-                if symbole not in entreprises_data:
-                    entreprises_data[symbole] = []
-                entreprises_data[symbole].append(data)
-        
-        # Afficher un sélecteur d'entreprise
-        if entreprises_data:
-            symboles = list(entreprises_data.keys())
-            symbole_selected = st.selectbox("Sélectionnez une entreprise", symboles)
-            
-            if symbole_selected:
-                st.subheader(f"Données pour {symbole_selected}")
-                
-                # Afficher les années disponibles
-                annees_data = entreprises_data[symbole_selected]
-                for data in annees_data:
-                    annee = data.get('annee')
-                    with st.expander(f"Année {annee}"):
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if data.get('bilan'):
-                                st.markdown("**Bilan**")
-                                for k, v in data['bilan'].items():
-                                    if isinstance(v, (int, float)):
-                                        st.text(f"{k}: {v:,.0f}")
-                        
-                        with col2:
-                            if data.get('compte_resultat'):
-                                st.markdown("**Compte de résultat**")
-                                for k, v in data['compte_resultat'].items():
-                                    if isinstance(v, (int, float)):
-                                        st.text(f"{k}: {v:,.0f}")
-    else:
-        st.info("Aucune donnée financière disponible. Configurez d'abord les données dans la section Développeur.")
 
 def page_analyse():
-    st.title("  Analyse Fondamentale")
-    st.info("  Sélectionnez un titre pour voir son analyse complète")
+    st.title("🔍 Analyse Fondamentale")
     
     financial_data = init_storage()
     
-    if financial_data:
-        symboles = sorted(set([data['symbole'] for data in financial_data.values() if isinstance(data, dict)]))
+    if not financial_data:
+        st.warning("Aucune donnée financière disponible.")
+        st.info("Rendez-vous dans la section Développeur pour saisir des données financières.")
+        return
+    
+    symboles = sorted(set([data['symbole'] for data in financial_data.values() if isinstance(data, dict)]))
+    
+    if not symboles:
+        st.warning("Aucune entreprise trouvée dans les données.")
+        return
+    
+    # Utiliser le mapping pour afficher des noms lisibles
+    mapping = st.session_state.get('symbol_mapping', {})
+    
+    # Créer les options avec format: "SNTS - Sonatel S.A." si mapping existe
+    options = []
+    for symbole in symboles:
+        nom_complet = mapping.get(symbole, symbole)
+        options.append(f"{symbole} - {nom_complet}")
+    
+    # Sélection de l'entreprise
+    selected_option = st.selectbox("Choisissez une entreprise", [''] + options)
+    
+    if selected_option:
+        # Extraire le symbole de l'option sélectionnée
+        symbole_selected = selected_option.split(" - ")[0]
         
-        if symboles:
-            symbole_selected = st.selectbox("Choisissez un titre", [''] + symboles)
+        # Récupérer les données de cette entreprise
+        symbole_data = {}
+        for key, data in financial_data.items():
+            if data.get('symbole') == symbole_selected:
+                symbole_data[data['annee']] = data
+        
+        if symbole_data:
+            # Afficher le nom complet si disponible
+            nom_complet = mapping.get(symbole_selected, symbole_selected)
+            st.success(f"📊 Données disponibles pour {nom_complet}")
             
-            if symbole_selected:
-                symbole_data = {}
-                for key, data in financial_data.items():
-                    if data.get('symbole') == symbole_selected:
-                        symbole_data[data['annee']] = data
+            # Sélection de l'année
+            annees = sorted(symbole_data.keys())
+            annee_selectionnee = st.selectbox("Sélectionnez l'année", annees, index=len(annees)-1)
+            
+            if annee_selectionnee:
+                data = symbole_data[annee_selectionnee]
                 
-                if symbole_data:
-                    st.success(f"  Données financières disponibles pour {symbole_selected}")
+                # Onglets pour l'analyse
+                tab1, tab2, tab3, tab4 = st.tabs(["📋 Ratios Financiers", "💰 Valorisation", "📈 Projections", "📊 Données Brutes"])
+                
+                with tab1:
+                    st.subheader(f"Ratios Financiers - {annee_selectionnee}")
                     
-                    annees = sorted(symbole_data.keys())
-                    annee_selectionnee = st.selectbox("Sélectionnez l'année", annees, index=len(annees)-1)
+                    if 'ratios' in data:
+                        ratios = data['ratios']
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.markdown("**📊 Rentabilité**")
+                            if 'roe' in ratios:
+                                st.metric("ROE (Rentabilité des Capitaux Propres)", f"{ratios['roe']:.2f}%")
+                            if 'roa' in ratios:
+                                st.metric("ROA (Rentabilité de l'Actif)", f"{ratios['roa']:.2f}%")
+                            if 'marge_nette' in ratios:
+                                st.metric("Marge Nette", f"{ratios['marge_nette']:.2f}%")
+                        
+                        with col2:
+                            st.markdown("**💧 Liquidité**")
+                            if 'ratio_liquidite_generale' in ratios:
+                                st.metric("Liquidité Générale", f"{ratios['ratio_liquidite_generale']:.2f}")
+                            if 'ratio_liquidite_reduite' in ratios:
+                                st.metric("Liquidité Réduite", f"{ratios['ratio_liquidite_reduite']:.2f}")
+                            if 'ratio_liquidite_immediate' in ratios:
+                                st.metric("Liquidité Immédiate", f"{ratios['ratio_liquidite_immediate']:.2f}")
+                        
+                        with col3:
+                            st.markdown("**🏦 Endettement**")
+                            if 'ratio_endettement' in ratios:
+                                st.metric("Ratio d'Endettement", f"{ratios['ratio_endettement']:.2f}%")
+                            if 'debt_to_ebitda' in ratios:
+                                st.metric("Dette/EBITDA", f"{ratios['debt_to_ebitda']:.2f}")
+                            if 'couverture_interets' in ratios:
+                                st.metric("Couverture des Intérêts", f"{ratios['couverture_interets']:.2f}x")
+                
+                with tab2:
+                    st.subheader("Valorisation par Multiples")
                     
-                    if annee_selectionnee:
-                        data = symbole_data[annee_selectionnee]
+                    valorisations = calculate_valuation_multiples(
+                        symbole_selected,
+                        annee_selectionnee,
+                        {**data['bilan'], **data['compte_resultat'], **data.get('ratios', {})},
+                        financial_data
+                    )
+                    
+                    if 'recommandation' in valorisations:
+                        col_rec1, col_rec2 = st.columns([1, 3])
                         
-                        st.markdown(f"###   Ratios pour {symbole_selected} - {annee_selectionnee}")
+                        with col_rec1:
+                            if "ACHAT FORT" in valorisations['recommandation']:
+                                st.success(f"## {valorisations['recommandation']}")
+                            elif "ACHAT" in valorisations['recommandation']:
+                                st.success(f"## {valorisations['recommandation']}")
+                            elif "VENTE" in valorisations['recommandation']:
+                                st.error(f"## {valorisations['recommandation']}")
+                            elif "VENTE FORTE" in valorisations['recommandation']:
+                                st.error(f"## {valorisations['recommandation']}")
+                            else:
+                                st.warning(f"## {valorisations['recommandation']}")
                         
-                        if 'ratios' in data:
-                            ratios = data['ratios']
-                            col1, col2, col3 = st.columns(3)
-                            
-                            with col1:
-                                st.markdown("**Rentabilité**")
-                                if 'roe' in ratios:
-                                    st.metric("ROE", f"{ratios['roe']:.2f}%")
-                                if 'roa' in ratios:
-                                    st.metric("ROA", f"{ratios['roa']:.2f}%")
-                                if 'marge_nette' in ratios:
-                                    st.metric("Marge Nette", f"{ratios['marge_nette']:.2f}%")
-                            
-                            with col2:
-                                st.markdown("**Liquidité**")
-                                if 'ratio_liquidite_generale' in ratios:
-                                    st.metric("Liquidité Générale", f"{ratios['ratio_liquidite_generale']:.2f}")
-                                if 'ratio_liquidite_reduite' in ratios:
-                                    st.metric("Liquidité Réduite", f"{ratios['ratio_liquidite_reduite']:.2f}")
-                            
-                            with col3:
-                                st.markdown("**Marché**")
-                                if 'per' in ratios:
-                                    st.metric("PER", f"{ratios['per']:.2f}")
-                                if 'price_to_book' in ratios:
-                                    st.metric("Price to Book", f"{ratios['price_to_book']:.2f}")
-                                if 'ev_ebitda' in ratios:
-                                    st.metric("EV/EBITDA", f"{ratios['ev_ebitda']:.2f}")
-                            
-                            st.markdown("###   Valorisation par Multiples")
-                            valorisations = calculate_valuation_multiples(
-                                symbole_selected,
-                                annee_selectionnee,
-                                {**data['bilan'], **data['compte_resultat'], **data.get('ratios', {})},
-                                financial_data
-                            )
-                            
-                            if 'recommandation' in valorisations:
-                                col_rec1, col_rec2 = st.columns([1, 2])
-                                
-                                with col_rec1:
-                                    if "ACHAT" in valorisations['recommandation']:
-                                        st.success(f"**{valorisations['recommandation']}**")
-                                    elif "VENTE" in valorisations['recommandation']:
-                                        st.error(f"**{valorisations['recommandation']}**")
-                                    else:
-                                        st.warning(f"**{valorisations['recommandation']}**")
-                                
-                                with col_rec2:
-                                    st.info(f"*{valorisations.get('justification', '')}*")
-                            
-                            st.markdown("###   Projections Financières")
-                            projections = calculate_financial_projections(symbole_selected, financial_data)
-                            
-                            if 'projections' in projections:
-                                df_proj = pd.DataFrame(projections['projections'])
-                                st.dataframe(df_proj.style.format({
-                                    'ca_projete': '{:,.0f}',
-                                    'rn_projete': '{:,.0f}',
-                                    'marge_nette_projetee': '{:.2f}%'
-                                }), use_container_width=True)
-                                st.caption(f"Méthode: {projections.get('methode', '')}")
-                                st.caption(f"TCAM CA: {projections.get('tcam_ca', 0):.2f}% | R² CA: {projections.get('r2_ca', 0):.3f}")
-                else:
-                    st.warning(f"  Aucune donnée financière sauvegardée pour {symbole_selected}")
-                    st.info("Utilisez la section Développeur pour saisir les données financières de cette entreprise")
-        else:
-            st.warning("Aucune donnée financière disponible")
-    else:
-        st.warning("Aucune donnée financière disponible")
+                        with col_rec2:
+                            st.info(f"**Justification :** {valorisations.get('justification', '')}")
+                    
+                    # Afficher les multiples de valorisation
+                    if 'medianes_secteur' in valorisations:
+                        st.markdown("### Multiples Sectoriels (Médiane)")
+                        medianes = valorisations['medianes_secteur']
+                        
+                        if medianes:
+                            df_medianes = pd.DataFrame(list(medianes.items()), columns=['Multiple', 'Valeur'])
+                            st.dataframe(df_medianes, use_container_width=True)
+                
+                with tab3:
+                    st.subheader("Projections Financières")
+                    
+                    projections = calculate_financial_projections(symbole_selected, financial_data)
+                    
+                    if 'projections' in projections:
+                        st.markdown(f"**Méthode :** {projections.get('methode', '')}")
+                        st.markdown(f"**TCAM du CA :** {projections.get('tcam_ca', 0):.2f}%")
+                        st.markdown(f"**TCAM du Résultat Net :** {projections.get('tcam_rn', 0):.2f}%")
+                        
+                        df_proj = pd.DataFrame(projections['projections'])
+                        st.dataframe(df_proj.style.format({
+                            'ca_projete': '{:,.0f}',
+                            'rn_projete': '{:,.0f}',
+                            'marge_nette_projetee': '{:.2f}%'
+                        }), use_container_width=True)
+                    elif 'erreur' in projections:
+                        st.warning(projections['erreur'])
+                
+                with tab4:
+                    st.subheader("Données Brutes")
+                    
+                    col_brut1, col_brut2 = st.columns(2)
+                    
+                    with col_brut1:
+                        if data.get('bilan'):
+                            st.markdown("**Bilan**")
+                            df_bilan = pd.DataFrame(list(data['bilan'].items()), columns=['Poste', 'Valeur'])
+                            st.dataframe(df_bilan, use_container_width=True)
+                    
+                    with col_brut2:
+                        if data.get('compte_resultat'):
+                            st.markdown("**Compte de résultat**")
+                            df_cr = pd.DataFrame(list(data['compte_resultat'].items()), columns=['Poste', 'Valeur'])
+                            st.dataframe(df_cr, use_container_width=True)
 
 # ===========================
-# SECTION DÉVELOPPEUR AMÉLIORÉE
+# SECTION DÉVELOPPEUR SIMPLIFIÉE
 # ===========================
 def developer_section():
-    """Section réservée au développeur pour gérer les données financières et les mappings"""
-    st.title("  Section Développeur - Gestion des Données")
+    """Section réservée au développeur pour gérer les données"""
+    st.title("⚙️ Section Développeur")
     
     if 'dev_authenticated' not in st.session_state:
         st.session_state.dev_authenticated = False
@@ -992,25 +973,23 @@ def developer_section():
                 st.error("Mot de passe incorrect")
         return
     
-    st.success("  Connecté en tant que développeur")
+    st.success("✅ Connecté en tant que développeur")
     
-    # Onglets pour la section développeur
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Gestion des Données Financières",
-        "🔗 Mapping des Symboles",
-        "🌐 Import Sika Finance",
+    # Onglets développeur
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Données Financières",
+        "🔤 Noms des Entreprises",
         "⚙️ Paramètres"
     ])
     
     with tab1:
         st.header("Gestion des Données Financières")
         
-        # Section pour ajouter/supprimer des données manuellement
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Ajouter des données")
-            symbole = st.text_input("Symbole (ex: SHEC)", key="dev_symbole")
+            st.subheader("Ajouter/Modifier des données")
+            symbole = st.text_input("Symbole BRVM (ex: SNTS)", key="dev_symbole")
             annee = st.number_input("Année", min_value=2000, max_value=2030, value=2023, key="dev_annee")
             
             with st.expander("Bilan"):
@@ -1041,7 +1020,7 @@ def developer_section():
                 flux_investissement = st.number_input("Flux d'Investissement", value=0.0, key="ft_flux_investissement")
                 flux_financement = st.number_input("Flux de Financement", value=0.0, key="ft_flux_financement")
             
-            if st.button("Sauvegarder les Données", type="primary"):
+            if st.button("💾 Sauvegarder les Données", type="primary", use_container_width=True):
                 if symbole and annee:
                     data_dict = {
                         'bilan': {
@@ -1079,50 +1058,52 @@ def developer_section():
                     data_dict['ratios'] = ratios
                     
                     if save_financial_data(symbole, annee, data_dict):
-                        st.success(f"Données sauvegardées pour {symbole} - {annee}")
-                        # Recharger les données
+                        st.success(f"✅ Données sauvegardées pour {symbole} - {annee}")
                         st.session_state.financial_data = load_all_financial_data()
                         st.rerun()
                     else:
-                        st.error("Erreur lors de la sauvegarde")
+                        st.error("❌ Erreur lors de la sauvegarde")
                 else:
-                    st.error("Veuillez remplir le symbole et l'année")
+                    st.error("⚠️ Veuillez remplir le symbole et l'année")
         
         with col2:
             st.subheader("Supprimer des données")
             
-            # Charger les données existantes
             financial_data = init_storage()
             if financial_data:
                 options = []
                 for key, data in financial_data.items():
                     if isinstance(data, dict):
-                        options.append(f"{data.get('symbole')} - {data.get('annee')} (clé: {key})")
+                        symbole = data.get('symbole', '')
+                        annee = data.get('annee', '')
+                        nom_complet = st.session_state.get('symbol_mapping', {}).get(symbole, symbole)
+                        options.append(f"{symbole} - {nom_complet} ({annee})")
                 
                 if options:
                     selected = st.selectbox("Sélectionnez les données à supprimer", options)
                     
-                    if selected and st.button("Supprimer", type="secondary"):
-                        # Extraire la clé
-                        key = selected.split("(clé: ")[1].replace(")", "")
-                        symbole = key.split("_")[0]
-                        annee = key.split("_")[1]
+                    if selected and st.button("🗑️ Supprimer", type="secondary", use_container_width=True):
+                        # Extraire symbole et année
+                        parts = selected.split(" (")
+                        symbole = parts[0].split(" - ")[0]
+                        annee = parts[1].replace(")", "")
                         
-                        if delete_financial_data(symbole, annee):
-                            st.success(f"Données supprimées pour {symbole} - {annee}")
-                            # Recharger les données
+                        if delete_financial_data(symbole, int(annee)):
+                            st.success(f"✅ Données supprimées pour {symbole} - {annee}")
                             st.session_state.financial_data = load_all_financial_data()
                             st.rerun()
                         else:
-                            st.error("Erreur lors de la suppression")
+                            st.error("❌ Erreur lors de la suppression")
                 else:
-                    st.info("Aucune donnée à supprimer")
+                    st.info("📭 Aucune donnée à supprimer")
     
     with tab2:
-        st.header("Mapping des Symboles")
+        st.header("Noms des Entreprises")
         st.info("""
-        Associez les noms d'entreprises de Sika Finance aux codes symboles BRVM.
-        Exemple: "VIVO ENERGY CI" → "SHEC"
+        Associez un nom complet à chaque symbole BRVM pour améliorer l'interface.
+        Exemple: 
+        - Symbole: "SNTS" → Nom: "Sonatel S.A."
+        - Symbole: "SHEC" → Nom: "Vivo Energy Côte d'Ivoire"
         """)
         
         # Afficher les mappings existants
@@ -1130,144 +1111,76 @@ def developer_section():
         st.session_state.symbol_mapping = symbol_mapping
         
         if symbol_mapping:
-            st.subheader("Mappings existants")
+            st.subheader("Noms configurés")
             df_mapping = pd.DataFrame(
                 [(k, v) for k, v in symbol_mapping.items()],
-                columns=["Nom Sika Finance", "Symbole BRVM"]
+                columns=["Symbole BRVM", "Nom Complet"]
             )
             st.dataframe(df_mapping, use_container_width=True)
         
-        # Ajouter un nouveau mapping
-        st.subheader("Ajouter/Modifier un mapping")
+        # Ajouter/Modifier un mapping
+        st.subheader("Ajouter/Modifier un nom")
+        
+        # Charger les symboles existants dans les données financières
+        financial_data = init_storage()
+        symboles_existants = sorted(set([data['symbole'] for data in financial_data.values() if isinstance(data, dict)]))
+        
         col_map1, col_map2 = st.columns(2)
         
         with col_map1:
-            entreprise_nom = st.text_input("Nom de l'entreprise (Sika Finance)", 
-                                          placeholder="Ex: VIVO ENERGY CI")
+            if symboles_existants:
+                symbole = st.selectbox("Symbole BRVM", [''] + symboles_existants)
+            else:
+                symbole = st.text_input("Symbole BRVM", placeholder="Ex: SNTS")
         
         with col_map2:
-            symbole_brvm = st.text_input("Symbole BRVM", 
-                                        placeholder="Ex: SHEC")
+            nom_complet = st.text_input("Nom complet de l'entreprise", 
+                                       placeholder="Ex: Sonatel S.A.")
         
         col_btn1, col_btn2 = st.columns(2)
         
         with col_btn1:
-            if st.button("Sauvegarder le mapping", type="primary"):
-                if entreprise_nom and symbole_brvm:
-                    if save_symbol_mapping(entreprise_nom, symbole_brvm):
-                        st.success(f"Mapping sauvegardé: {entreprise_nom} → {symbole_brvm}")
+            if st.button("💾 Sauvegarder", type="primary", use_container_width=True):
+                if symbole and nom_complet:
+                    if save_symbol_mapping(symbole, nom_complet):
+                        st.success(f"✅ Nom sauvegardé: {symbole} → {nom_complet}")
                         st.session_state.symbol_mapping = load_symbol_mapping()
                         st.rerun()
                     else:
-                        st.error("Erreur lors de la sauvegarde")
+                        st.error("❌ Erreur lors de la sauvegarde")
                 else:
-                    st.error("Veuillez remplir tous les champs")
+                    st.error("⚠️ Veuillez remplir tous les champs")
         
         with col_btn2:
-            if symbol_mapping and entreprise_nom in symbol_mapping:
-                if st.button("Supprimer le mapping", type="secondary"):
-                    if delete_symbol_mapping(entreprise_nom):
-                        st.success(f"Mapping supprimé pour {entreprise_nom}")
+            if symbol_mapping and symbole in symbol_mapping:
+                if st.button("🗑️ Supprimer", type="secondary", use_container_width=True):
+                    if delete_symbol_mapping(symbole):
+                        st.success(f"✅ Nom supprimé pour {symbole}")
                         st.session_state.symbol_mapping = load_symbol_mapping()
                         st.rerun()
                     else:
-                        st.error("Erreur lors de la suppression")
+                        st.error("❌ Erreur lors de la suppression")
     
     with tab3:
-        st.header("Import depuis Sika Finance")
-        st.info("Importez automatiquement les données financières depuis Sika Finance")
-        
-        # Utiliser le mapping pour faciliter l'import
-        if 'symbol_mapping' in st.session_state and st.session_state.symbol_mapping:
-            st.subheader("Entreprises configurées")
-            
-            for entreprise_nom, symbole in st.session_state.symbol_mapping.items():
-                with st.expander(f"{entreprise_nom} → {symbole}"):
-                    col_s1, col_s2 = st.columns([3, 1])
-                    
-                    with col_s1:
-                        # Générer l'URL Sika Finance
-                        url_sika = get_sika_finance_url(entreprise_nom)
-                        st.text(f"URL Sika Finance: {url_sika}")
-                    
-                    with col_s2:
-                        if st.button(f"Importer", key=f"import_{entreprise_nom}"):
-                            with st.spinner(f"Importation depuis {url_sika}..."):
-                                data_sika = scrape_sika_finance(url_sika)
-                                
-                                if data_sika:
-                                    # Demander l'année
-                                    annee = st.number_input("Année des données", 
-                                                           min_value=2000, 
-                                                           max_value=2030, 
-                                                           value=2023,
-                                                           key=f"annee_{entreprise_nom}")
-                                    
-                                    # Calculer les ratios
-                                    ratios = calculate_enhanced_financial_ratios(
-                                        data_sika.get('bilan', {}),
-                                        data_sika.get('compte_resultat', {}),
-                                        data_sika.get('flux_tresorerie', {})
-                                    )
-                                    data_sika['ratios'] = ratios
-                                    
-                                    # Sauvegarder
-                                    if save_financial_data(symbole, annee, data_sika):
-                                        st.success(f"Données importées pour {symbole} - {annee}")
-                                        st.session_state.financial_data = load_all_financial_data()
-                                    else:
-                                        st.error("Erreur lors de la sauvegarde")
-                                else:
-                                    st.error("Impossible d'importer les données")
-        else:
-            st.warning("Aucun mapping configuré. Configurez d'abord des mappings dans l'onglet précédent.")
-            
-            # Option manuelle
-            st.subheader("Import manuel")
-            entreprise_nom = st.text_input("Nom de l'entreprise sur Sika Finance")
-            symbole_brvm = st.text_input("Symbole BRVM à utiliser")
-            
-            if entreprise_nom and symbole_brvm:
-                url_sika = get_sika_finance_url(entreprise_nom)
-                st.text(f"URL générée: {url_sika}")
-                
-                if st.button("Tester l'import"):
-                    with st.spinner(f"Test d'import depuis {url_sika}..."):
-                        data_sika = scrape_sika_finance(url_sika)
-                        
-                        if data_sika:
-                            st.success("Données récupérées avec succès!")
-                            
-                            # Afficher un aperçu
-                            with st.expander("Aperçu des données"):
-                                if data_sika.get('bilan'):
-                                    st.write("**Bilan:**")
-                                    st.json(data_sika['bilan'])
-                                
-                                if data_sika.get('compte_resultat'):
-                                    st.write("**Compte de résultat:**")
-                                    st.json(data_sika['compte_resultat'])
-    
-    with tab4:
         st.header("Paramètres")
         
         st.subheader("Configuration Supabase")
         st.info(f"URL: {SUPABASE_URL}")
         
-        if st.button("Tester la connexion Supabase"):
+        if st.button("🔗 Tester la connexion Supabase", use_container_width=True):
             supabase = init_supabase()
             if supabase:
-                st.success("Connexion Supabase active")
+                st.success("✅ Connexion Supabase active")
             else:
-                st.error("Erreur de connexion Supabase")
+                st.error("❌ Erreur de connexion Supabase")
         
         st.subheader("Gestion du cache")
-        if st.button("Vider le cache", type="secondary"):
+        if st.button("🧹 Vider le cache", type="secondary", use_container_width=True):
             st.cache_data.clear()
-            st.success("Cache vidé")
+            st.success("✅ Cache vidé")
         
         st.subheader("Déconnexion")
-        if st.button("Se déconnecter", type="secondary"):
+        if st.button("🚪 Se déconnecter", type="secondary", use_container_width=True):
             st.session_state.dev_authenticated = False
             st.rerun()
 
@@ -1284,15 +1197,13 @@ def main():
         page_accueil()
     elif st.session_state.page == 'cours':
         page_cours()
-    elif st.session_state.page == 'secteurs':
-        page_secteurs()
     elif st.session_state.page == 'analyse':
         page_analyse()
     elif st.session_state.page == 'dev':
         developer_section()
     
     st.markdown("---")
-    st.caption(f"  {datetime.now().strftime('%d/%m/%Y %H:%M')} | Analyse BRVM Pro v1.0")
+    st.caption(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')} | Analyse BRVM Pro v1.0")
 
 if __name__ == "__main__":
     main()
