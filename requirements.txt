@@ -1,9 +1,5 @@
 streamlit
-pandas
 requests
 beautifulsoup4
-supabase
-scikit-learn
-numpy
-plotly
-urllib3
+pandas
+lxml
