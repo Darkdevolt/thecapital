@@ -10,22 +10,54 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import urllib3
 
+# Désactiver les warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings('ignore')
 
-# Configuration
+# ===========================
+# CONFIGURATION
+# ===========================
+
+# Configuration Streamlit
 st.set_page_config(page_title="Analyse BRVM", layout="wide")
 
 # Mot de passe développeur
 DEVELOPER_PASSWORD = "dev_brvm_2024"
 
-# ===========================
-# CONFIGURATION SUPABASE
-# ===========================
+# Configuration Supabase
 SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
 SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
 
-# Dictionnaire de mapping des symboles (sera chargé depuis Supabase)
+# ===========================
+# INITIALISATION SUPABASE
+# ===========================
+
+def init_supabase():
+    """Initialiser la connexion à Supabase"""
+    if 'supabase' not in st.session_state:
+        try:
+            st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            # Test de connexion
+            test_response = st.session_state.supabase.table("financial_data").select("*", count="exact").limit(1).execute()
+            if not hasattr(st, '_supabase_success_shown'):
+                st._supabase_success_shown = True
+        except Exception as e:
+            st.error(f"Erreur de connexion Supabase: {str(e)}")
+            return None
+    return st.session_state.supabase
+
+def init_storage():
+    """Initialiser le stockage avec Supabase"""
+    if 'financial_data' not in st.session_state:
+        st.session_state.financial_data = load_all_financial_data()
+    if 'symbol_mapping' not in st.session_state:
+        st.session_state.symbol_mapping = load_symbol_mapping()
+    return st.session_state.financial_data
+
+# ===========================
+# FONCTIONS DE GESTION SUPABASE
+# ===========================
+
 def load_symbol_mapping():
     """Charger le mapping des symboles depuis Supabase"""
     supabase = init_supabase()
@@ -91,19 +123,6 @@ def delete_symbol_mapping(entreprise_nom):
     except Exception as e:
         st.error(f"Erreur de suppression du mapping: {str(e)}")
         return False
-
-def init_supabase():
-    """Initialiser la connexion à Supabase"""
-    if 'supabase' not in st.session_state:
-        try:
-            st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-            # Test de connexion
-            test_response = st.session_state.supabase.table("financial_data").select("*", count="exact").limit(1).execute()
-            st.success("  Connexion Supabase établie")
-        except Exception as e:
-            st.error(f"  Erreur de connexion Supabase: {str(e)}")
-            return None
-    return st.session_state.supabase
 
 def load_all_financial_data():
     """Charger toutes les données financières depuis Supabase"""
@@ -185,18 +204,10 @@ def delete_financial_data(symbole, annee):
     except Exception as e:
         st.error(f"Erreur de suppression: {str(e)}")
         return False
-
-def init_storage():
-    """Initialiser le stockage avec Supabase"""
-    if 'financial_data' not in st.session_state:
-        st.session_state.financial_data = load_all_financial_data()
-    if 'symbol_mapping' not in st.session_state:
-        st.session_state.symbol_mapping = load_symbol_mapping()
-    return st.session_state.financial_data
-
 # ===========================
 # FONCTIONS DE CALCUL DES RATIOS
 # ===========================
+
 def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie):
     """Version améliorée avec tous les ratios standards"""
     ratios = {}
@@ -488,8 +499,9 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
         'methode': '40% TCAM + 60% Régression Linéaire'
     }
 
-# Désactiver les warnings SSL
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# ===========================
+# FONCTIONS DE SCRAPING
+# ===========================
 
 @st.cache_data(ttl=300)
 def scrape_brvm():
@@ -583,105 +595,20 @@ def scrape_brvm():
         st.error(f"Erreur lors du scraping: {str(e)}")
         return None, None
 
-# Interface principale
-col1, col2, col3 = st.columns([1, 1, 4])
-with col1:
-    if st.button("🔄 Rafraîchir", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+# Fonctions de placeholder pour Sika Finance (à implémenter)
+def get_sika_finance_url(entreprise_nom):
+    """Générer l'URL Sika Finance pour une entreprise"""
+    # À implémenter : logique pour générer l'URL correcte
+    return f"https://www.sikafinance.com/{entreprise_nom.replace(' ', '-').lower()}"
 
-with col2:
-    st.info(f"⏰ {datetime.now().strftime('%H:%M:%S')}")
-
-st.markdown("---")
-
-# Scraper et afficher les données
-with st.spinner("Chargement des données de la BRVM..."):
-    df_indices, df_actions = scrape_brvm()
-
-if df_indices is not None or df_actions is not None:
-    st.success("✅ Données chargées avec succès depuis Sikafinance")
-    
-    # Onglets pour séparer indices et actions
-    tab1, tab2 = st.tabs(["📊 Actions Cotées", "📈 Indices BRVM"])
-    
-    with tab1:
-        if df_actions is not None and not df_actions.empty:
-            # Statistiques des actions
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Nombre d'actions", len(df_actions))
-            with col2:
-                st.metric("Dernière mise à jour", datetime.now().strftime('%d/%m/%Y'))
-            with col3:
-                st.metric("Source", "Sikafinance")
-            
-            st.markdown("---")
-            
-            # Filtre de recherche
-            search = st.text_input("🔍 Rechercher une action", placeholder="Entrez le nom ou le symbole...")
-            
-            if search:
-                mask = df_actions.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
-                filtered_df = df_actions[mask]
-                st.info(f"🔎 {len(filtered_df)} résultat(s) trouvé(s)")
-            else:
-                filtered_df = df_actions
-            
-            # Afficher le tableau des actions
-            st.dataframe(
-                filtered_df,
-                use_container_width=True,
-                height=500,
-                hide_index=True
-            )
-            
-            # Bouton de téléchargement
-            csv_actions = filtered_df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="📥 Télécharger les actions en CSV",
-                data=csv_actions,
-                file_name=f"brvm_actions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-        else:
-            st.warning("⚠️ Aucune donnée d'action disponible")
-    
-    with tab2:
-        if df_indices is not None and not df_indices.empty:
-            st.subheader("Indices du marché BRVM")
-            
-            # Afficher le tableau des indices
-            st.dataframe(
-                df_indices,
-                use_container_width=True,
-                height=500,
-                hide_index=True
-            )
-            
-            # Bouton de téléchargement
-            csv_indices = df_indices.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="📥 Télécharger les indices en CSV",
-                data=csv_indices,
-                file_name=f"brvm_indices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-        else:
-            st.warning("⚠️ Aucune donnée d'indice disponible")
-
-else:
-    st.error("❌ Impossible de charger les données. Veuillez réessayer plus tard.")
-    st.info("💡 Le site source peut être temporairement indisponible.")
-
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666;'>
-    <small>Données provenant de <a href='https://www.sikafinance.com/marches/aaz' target='_blank'>Sikafinance.com</a> | 
-    Mise à jour automatique toutes les 5 minutes</small>
-</div>
-""", unsafe_allow_html=True)
+def scrape_sika_finance(url):
+    """Scraper les données financières depuis Sika Finance"""
+    # À implémenter : logique de scraping spécifique à Sika Finance
+    return {
+        'bilan': {},
+        'compte_resultat': {},
+        'flux_tresorerie': {}
+    }
 
 # ===========================
 # NAVIGATION STYLÉE
@@ -753,7 +680,7 @@ def render_navigation():
     st.markdown("---")
 
 # ===========================
-# PAGES SIMPLIFIÉES (sans scraping BRVM)
+# PAGES DE L'APPLICATION
 # ===========================
 def page_accueil():
     st.title("  Accueil - Analyse BRVM Pro")
@@ -807,62 +734,94 @@ def page_accueil():
 
 def page_cours():
     st.title("  Données de Marché")
-    st.info("  ⚠️ Cette fonctionnalité nécessite une source de données de marché externe")
     
-    st.warning("""
-    La récupération des cours en direct depuis BRVM est temporairement désactivée.
+    # Scraper et afficher les données
+    with st.spinner("Chargement des données de la BRVM..."):
+        df_indices, df_actions = scrape_brvm()
     
-    **Alternatives disponibles :**
-    1. Utilisez la section **Analyse** pour les données fondamentales
-    2. Importez manuellement les données via la section **Développeur**
-    3. Configurez une source de données alternative
-    """)
-    
-    # Afficher les entreprises configurées
-    financial_data = init_storage()
-    if financial_data and len(financial_data) > 0:
-        st.subheader("  Entreprises disponibles dans la base")
+    if df_indices is not None or df_actions is not None:
+        st.success("✅ Données chargées avec succès depuis Sikafinance")
         
-        entreprises_info = []
-        for key, data in financial_data.items():
-            if isinstance(data, dict):
-                derniere_annee = data.get('annee', 'N/A')
-                entreprises_info.append({
-                    'Symbole': data.get('symbole', 'N/A'),
-                    'Année': derniere_annee,
-                    'Clé': key
-                })
+        # Onglets pour séparer indices et actions
+        tab1, tab2 = st.tabs(["📊 Actions Cotées", "📈 Indices BRVM"])
         
-        if entreprises_info:
-            df_entreprises = pd.DataFrame(entreprises_info)
-            st.dataframe(df_entreprises, use_container_width=True)
-
-def page_secteurs():
-    st.title("  Analyse par Secteur")
+        with tab1:
+            if df_actions is not None and not df_actions.empty:
+                # Statistiques des actions
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Nombre d'actions", len(df_actions))
+                with col2:
+                    st.metric("Dernière mise à jour", datetime.now().strftime('%d/%m/%Y'))
+                with col3:
+                    st.metric("Source", "Sikafinance")
+                
+                st.markdown("---")
+                
+                # Filtre de recherche
+                search = st.text_input("🔍 Rechercher une action", placeholder="Entrez le nom ou le symbole...")
+                
+                if search:
+                    mask = df_actions.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
+                    filtered_df = df_actions[mask]
+                    st.info(f"🔎 {len(filtered_df)} résultat(s) trouvé(s)")
+                else:
+                    filtered_df = df_actions
+                
+                # Afficher le tableau des actions
+                st.dataframe(
+                    filtered_df,
+                    use_container_width=True,
+                    height=500,
+                    hide_index=True
+                )
+                
+                # Bouton de téléchargement
+                csv_actions = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📥 Télécharger les actions en CSV",
+                    data=csv_actions,
+                    file_name=f"brvm_actions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("⚠️ Aucune donnée d'action disponible")
+        
+        with tab2:
+            if df_indices is not None and not df_indices.empty:
+                st.subheader("Indices du marché BRVM")
+                
+                # Afficher le tableau des indices
+                st.dataframe(
+                    df_indices,
+                    use_container_width=True,
+                    height=500,
+                    hide_index=True
+                )
+                
+                # Bouton de téléchargement
+                csv_indices = df_indices.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button(
+                    label="📥 Télécharger les indices en CSV",
+                    data=csv_indices,
+                    file_name=f"brvm_indices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("⚠️ Aucune donnée d'indice disponible")
     
-    st.info("  ⚠️ Cette fonctionnalité nécessite une classification sectorielle")
+    else:
+        st.error("❌ Impossible de charger les données. Veuillez réessayer plus tard.")
+        st.info("💡 Le site source peut être temporairement indisponible.")
     
-    financial_data = init_storage()
-    if financial_data and len(financial_data) > 0:
-        # Créer une classification sectorielle basique
-        st.subheader("  Données financières par entreprise")
-        
-        # Grouper par symbole
-        entreprises_data = {}
-        for key, data in financial_data.items():
-            if isinstance(data, dict):
-                symbole = data.get('symbole')
-                if symbole not in entreprises_data:
-                    entreprises_data[symbole] = []
-                entreprises_data[symbole].append(data)
-        
-        # Afficher un sélecteur d'entreprise
-        if entreprises_data:
-            symboles = list(entreprises_data.keys())
-            symbole_selected = st.selectbox("Sélectionnez une entreprise", symboles)
-            
-            if symbole_selected:
-                st.subheader(f"Données pour {symbole_selected}")
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; color: #666;'>
+        <small>Données provenant de <a href='https://www.sikafinance.com/marches/aaz' target='_blank'>Sikafinance.com</a> | 
+        Mise à jour automatique toutes les 5 minutes</small>
+    </div>
+    """, unsafe_allow_html=True)
 
 def page_secteurs():
     st.title("  Analyse par Secteur")
@@ -911,13 +870,8 @@ def page_secteurs():
                                 for k, v in data['compte_resultat'].items():
                                     if isinstance(v, (int, float)):
                                         st.text(f"{k}: {v:,.0f}")
-                        
-                        with col2:
-                            if data.get('compte_resultat'):
-                                st.markdown("**Compte de résultat**")
-                                for k, v in data['compte_resultat'].items():
-                                    if isinstance(v, (int, float)):
-                                        st.text(f"{k}: {v:,.0f}")
+    else:
+        st.info("Aucune donnée financière disponible. Configurez d'abord les données dans la section Développeur.")
 
 def page_analyse():
     st.title("  Analyse Fondamentale")
