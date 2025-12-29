@@ -758,27 +758,54 @@ def page_secteurs():
             
             if symbole_selected:
                 st.subheader(f"Données pour {symbole_selected}")
+
+def page_secteurs():
+    st.title("  Analyse par Secteur")
+    
+    st.info("  ⚠️ Cette fonctionnalité nécessite une classification sectorielle")
+    
+    financial_data = init_storage()
+    if financial_data and len(financial_data) > 0:
+        # Créer une classification sectorielle basique
+        st.subheader("  Données financières par entreprise")
+        
+        # Grouper par symbole
+        entreprises_data = {}
+        for key, data in financial_data.items():
+            if isinstance(data, dict):
+                symbole = data.get('symbole')
+                if symbole not in entreprises_data:
+                    entreprises_data[symbole] = []
+                entreprises_data[symbole].append(data)
+        
+        # Afficher un sélecteur d'entreprise
+        if entreprises_data:
+            symboles = list(entreprises_data.keys())
+            symbole_selected = st.selectbox("Sélectionnez une entreprise", symboles)
+            
+            if symbole_selected:
+                st.subheader(f"Données pour {symbole_selected}")
                 
-                        # Afficher les années disponibles
-                        annees_data = entreprises_data[symbole_selected]
-                        for data in annees_data:
-                            annee = data.get('annee')
-                            with st.expander(f"Année {annee}"):  # <--- CORRIGÉ : "with" au lieu de "avec"
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    if data.get('bilan'):
-                                        st.markdown("**Bilan**")
-                                        for k, v in data['bilan'].items():
-                                            if isinstance(v, (int, float)):
-                                                st.text(f"{k}: {v:,.0f}")
-                                
-                                with col2:
-                                    if data.get('compte_resultat'):
-                                        st.markdown("**Compte de résultat**")
-                                        for k, v in data['compte_resultat'].items():
-                                            if isinstance(v, (int, float)):
-                                                st.text(f"{k}: {v:,.0f}")
+                # Afficher les années disponibles
+                annees_data = entreprises_data[symbole_selected]
+                for data in annees_data:
+                    annee = data.get('annee')
+                    with st.expander(f"Année {annee}"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if data.get('bilan'):
+                                st.markdown("**Bilan**")
+                                for k, v in data['bilan'].items():
+                                    if isinstance(v, (int, float)):
+                                        st.text(f"{k}: {v:,.0f}")
+                        
+                        with col2:
+                            if data.get('compte_resultat'):
+                                st.markdown("**Compte de résultat**")
+                                for k, v in data['compte_resultat'].items():
+                                    if isinstance(v, (int, float)):
+                                        st.text(f"{k}: {v:,.0f}")
                         
                         with col2:
                             if data.get('compte_resultat'):
