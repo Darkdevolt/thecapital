@@ -492,91 +492,124 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # FONCTIONS DE SCRAPING SIKA FINANCE
 # ===========================
 @st.cache_data(ttl=300)
-def scrape_sika_finance(entreprise_url):
-    """Scraper les données financières depuis Sika Finance"""
+def scrape_brvm():
+    """Scrape les données de cours des actions depuis BRVM"""
+    url = "https://www.brvm.org/fr/cours-actions/0"
+    
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        response = requests.get(entreprise_url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Ici, vous devez adapter le scraping selon la structure de Sika Finance
-        # Ceci est un exemple générique - à adapter selon la structure réelle du site
+        # Trouver le tableau des cours
+        table = soup.find('table')
         
-        data = {
-            'bilan': {},
-            'compte_resultat': {},
-            'flux_tresorerie': {},
-            'informations_generales': {}
-        }
+        if not table:
+            return None
         
-        # Exemple de scraping - à adapter
-        # Trouver les tableaux financiers
-        tables = soup.find_all('table')
+        # Extraire les en-têtes
+        headers = []
+        thead = table.find('thead')
+        if thead:
+            for th in thead.find_all('th'):
+                headers.append(th.get_text(strip=True))
         
-        for table in tables:
-            caption = table.find('caption')
-            if caption:
-                caption_text = caption.get_text(strip=True).lower()
-                
-                # Adapter ces conditions selon la structure de Sika Finance
-                if 'bilan' in caption_text:
-                    # Extraire les données du bilan
-                    rows = table.find_all('tr')
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 2:
-                            label = cells[0].get_text(strip=True)
-                            value = cells[1].get_text(strip=True)
-                            # Nettoyer et convertir la valeur
-                            value = value.replace(' ', '').replace(',', '.')
-                            try:
-                                if 'M' in value or 'm' in value:
-                                    value = float(value.replace('M', '').replace('m', '')) * 1000000
-                                elif 'K' in value or 'k' in value:
-                                    value = float(value.replace('K', '').replace('k', '')) * 1000
-                                else:
-                                    value = float(value)
-                                data['bilan'][label] = value
-                            except:
-                                pass
-                
-                elif 'compte de résultat' in caption_text or 'resultat' in caption_text:
-                    # Extraire les données du compte de résultat
-                    rows = table.find_all('tr')
-                    for row in rows:
-                        cells = row.find_all('td')
-                        if len(cells) >= 2:
-                            label = cells[0].get_text(strip=True)
-                            value = cells[1].get_text(strip=True)
-                            # Nettoyer et convertir la valeur
-                            value = value.replace(' ', '').replace(',', '.')
-                            try:
-                                if 'M' in value or 'm' in value:
-                                    value = float(value.replace('M', '').replace('m', '')) * 1000000
-                                elif 'K' in value or 'k' in value:
-                                    value = float(value.replace('K', '').replace('k', '')) * 1000
-                                else:
-                                    value = float(value)
-                                data['compte_resultat'][label] = value
-                            except:
-                                pass
+        # Extraire les données
+        data = []
+        tbody = table.find('tbody')
+        if tbody:
+            for row in tbody.find_all('tr'):
+                cols = row.find_all('td')
+                if cols:
+                    row_data = [col.get_text(strip=True) for col in cols]
+                    data.append(row_data)
         
-        return data
+        if not headers or not data:
+            return None
+        
+        # Créer le DataFrame
+        df = pd.DataFrame(data, columns=headers)
+        
+        return df
     
     except Exception as e:
-        st.error(f"Erreur lors du scraping Sika Finance: {str(e)}")
+        st.error(f"Erreur lors du scraping: {str(e)}")
         return None
 
-def get_sika_finance_url(entreprise_nom):
-    """Construire l'URL Sika Finance à partir du nom de l'entreprise"""
-    # Cette fonction doit être adaptée selon la structure des URLs Sika Finance
-    # Exemple: convertir "VIVO ENERGY CI" en "vivo-energy-ci"
-    nom_formate = entreprise_nom.lower().replace(' ', '-').replace('.', '').replace(',', '')
-    return f"https://www.sika-finance.com/entreprises/{nom_formate}"
+# Bouton de rafraîchissement
+col1, col2, col3 = st.columns([1, 1, 4])
+with col1:
+    if st.button("🔄 Rafraîchir", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+with col2:
+    st.info(f"⏰ {datetime.now().strftime('%H:%M:%S')}")
+
+st.markdown("---")
+
+# Scraper et afficher les données
+with st.spinner("Chargement des données de la BRVM..."):
+    df = scrape_brvm()
+
+if df is not None and not df.empty:
+    st.success(f"✅ {len(df)} actions chargées avec succès")
+    
+    # Afficher les statistiques
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Nombre d'actions", len(df))
+    with col2:
+        st.metric("Dernière mise à jour", datetime.now().strftime('%d/%m/%Y'))
+    with col3:
+        st.metric("Source", "BRVM.org")
+    
+    st.markdown("---")
+    
+    # Filtre de recherche
+    search = st.text_input("🔍 Rechercher une action", placeholder="Entrez le nom ou le symbole...")
+    
+    if search:
+        # Filtrer sur toutes les colonnes
+        mask = df.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
+        filtered_df = df[mask]
+        st.info(f"🔎 {len(filtered_df)} résultat(s) trouvé(s)")
+    else:
+        filtered_df = df
+    
+    # Afficher le tableau
+    st.dataframe(
+        filtered_df,
+        use_container_width=True,
+        height=600,
+        hide_index=True
+    )
+    
+    # Bouton de téléchargement
+    csv = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+    st.download_button(
+        label="📥 Télécharger en CSV",
+        data=csv,
+        file_name=f"brvm_cours_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv"
+    )
+    
+else:
+    st.error("❌ Impossible de charger les données. Veuillez réessayer plus tard.")
+    st.info("💡 Le site BRVM peut être temporairement indisponible ou la structure de la page a changé.")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666;'>
+    <small>Données provenant de <a href='https://www.brvm.org' target='_blank'>BRVM.org</a> | 
+    Mise à jour automatique toutes les 5 minutes</small>
+</div>
+""", unsafe_allow_html=True)
 
 # ===========================
 # NAVIGATION STYLÉE
