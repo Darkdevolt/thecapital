@@ -28,6 +28,16 @@ DEVELOPER_PASSWORD = "dev_brvm_2024"
 SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
 SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
 
+# Configuration des secteurs Rich Bourse
+SECTEURS_RICHBOURSE = {
+    'Consommation discrétionnaire': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/consommation-discretionnaire',
+    'Consommation de base': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/consommation-de-base',
+    'Énergie': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/energie',
+    'Industriels': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/industriels',
+    'Services financiers': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/services-financiers',
+    'Services publics': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/services-publics'
+}
+
 # ===========================
 # INITIALISATION SUPABASE
 # ===========================
@@ -68,13 +78,16 @@ def load_symbol_mapping():
         response = supabase.table("symbol_mapping").select("*").execute()
         mapping = {}
         for record in response.data:
-            mapping[record['symbole']] = record['nom_complet']  # Changé : symbole -> nom_complet
+            mapping[record['symbole']] = {
+                'nom': record.get('nom_complet', record['symbole']),
+                'secteur': record.get('secteur', 'Non classifié')
+            }
         return mapping
     except Exception as e:
         st.error(f"Erreur de chargement du mapping: {str(e)}")
         return {}
 
-def save_symbol_mapping(symbole, nom_complet):
+def save_symbol_mapping(symbole, nom_complet, secteur=None):
     """Sauvegarder un mapping dans Supabase"""
     supabase = init_supabase()
     if not supabase:
@@ -84,6 +97,7 @@ def save_symbol_mapping(symbole, nom_complet):
         record = {
             'symbole': symbole,
             'nom_complet': nom_complet,
+            'secteur': secteur if secteur else 'Non classifié',
             'last_update': datetime.now().isoformat()
         }
         
@@ -206,395 +220,168 @@ def delete_financial_data(symbole, annee):
         return False
 
 # ===========================
-# FONCTIONS DE CALCUL DES RATIOS
+# FONCTIONS DE SCRAPING DES SECTEURS RICHBOURSE
 # ===========================
 
-def calculate_enhanced_financial_ratios(bilan, compte_resultat, flux_tresorerie):
-    """Version améliorée avec tous les ratios standards"""
-    ratios = {}
-    
-    # ========== CALCULS INTERMÉDIAIRES CRITIQUES ==========
-    ebitda = compte_resultat.get('resultat_exploitation', 0)
-    ebit = compte_resultat.get('resultat_exploitation', 0)
-    fcf = flux_tresorerie.get('flux_exploitation', 0) + flux_tresorerie.get('flux_investissement', 0)
-    working_capital = bilan.get('actif_courant', 0) - bilan.get('passif_courant', 0)
-    
-    market_cap = bilan.get('cours_action', 0) * bilan.get('nb_actions', 0)
-    enterprise_value = market_cap + bilan.get('dettes_totales', 0) - bilan.get('tresorerie', 0)
-    
-    # ========== RATIOS DE RENTABILITÉ ==========
-    if compte_resultat.get('resultat_net') and compte_resultat.get('chiffre_affaires'):
-        ratios['marge_nette'] = (compte_resultat['resultat_net'] / compte_resultat['chiffre_affaires']) * 100
-    
-    if ebit and compte_resultat.get('chiffre_affaires'):
-        ratios['marge_ebit'] = (ebit / compte_resultat['chiffre_affaires']) * 100
-    
-    if ebitda and compte_resultat.get('chiffre_affaires'):
-        ratios['marge_ebitda'] = (ebitda / compte_resultat['chiffre_affaires']) * 100
-    
-    if compte_resultat.get('resultat_net') and bilan.get('capitaux_propres'):
-        ratios['roe'] = (compte_resultat['resultat_net'] / bilan['capitaux_propres']) * 100
-    
-    if compte_resultat.get('resultat_net') and bilan.get('actif_total'):
-        ratios['roa'] = (compte_resultat['resultat_net'] / bilan['actif_total']) * 100
-    
-    if ebit and bilan.get('actif_total'):
-        roic_denom = bilan['actif_total'] - bilan.get('passif_courant', 0)
-        if roic_denom > 0:
-            ratios['roic'] = (ebit * 0.75 / roic_denom) * 100
-    
-    # ========== RATIOS DE LIQUIDITÉ ==========
-    if bilan.get('actif_courant') and bilan.get('passif_courant') and bilan.get('passif_courant') > 0:
-        ratios['ratio_liquidite_generale'] = bilan['actif_courant'] / bilan['passif_courant']
-    
-    if bilan.get('actif_courant') and bilan.get('stocks') is not None and bilan.get('passif_courant'):
-        actif_liquide = bilan['actif_courant'] - bilan.get('stocks', 0)
-        if bilan['passif_courant'] > 0:
-            ratios['ratio_liquidite_reduite'] = actif_liquide / bilan['passif_courant']
-    
-    if bilan.get('tresorerie') and bilan.get('passif_courant') and bilan.get('passif_courant') > 0:
-        ratios['ratio_liquidite_immediate'] = bilan['tresorerie'] / bilan['passif_courant']
-    
-    # ========== RATIOS D'ENDETTEMENT ==========
-    if bilan.get('dettes_totales') and bilan.get('capitaux_propres') and bilan.get('capitaux_propres') > 0:
-        ratios['ratio_endettement'] = (bilan['dettes_totales'] / bilan['capitaux_propres']) * 100
-    
-    if bilan.get('dettes_totales') and bilan.get('actif_total') and bilan.get('actif_total') > 0:
-        ratios['taux_endettement'] = (bilan['dettes_totales'] / bilan['actif_total']) * 100
-    
-    if bilan.get('capitaux_propres') and bilan.get('actif_total') and bilan.get('actif_total') > 0:
-        ratios['ratio_solvabilite'] = (bilan['capitaux_propres'] / bilan['actif_total']) * 100
-    
-    if bilan.get('dettes_totales') and ebitda > 0:
-        ratios['debt_to_ebitda'] = bilan['dettes_totales'] / ebitda
-    
-    if ebit and compte_resultat.get('charges_financieres') and abs(compte_resultat.get('charges_financieres', 0)) > 0:
-        ratios['couverture_interets'] = ebit / abs(compte_resultat['charges_financieres'])
-    
-    # ========== RATIOS D'EFFICACITÉ ==========
-    if compte_resultat.get('chiffre_affaires') and bilan.get('actif_total') and bilan.get('actif_total') > 0:
-        ratios['rotation_actifs'] = compte_resultat['chiffre_affaires'] / bilan['actif_total']
-    
-    if compte_resultat.get('chiffre_affaires') and bilan.get('stocks') and bilan.get('stocks') > 0:
-        ratios['rotation_stocks'] = compte_resultat['chiffre_affaires'] / bilan['stocks']
-    
-    if compte_resultat.get('chiffre_affaires') and bilan.get('creances') and compte_resultat.get('chiffre_affaires') > 0:
-        ratios['delai_recouvrement'] = (bilan['creances'] / compte_resultat['chiffre_affaires']) * 365
-    
-    # ========== RATIOS DE MARCHÉ ==========
-    if bilan.get('cours_action') and compte_resultat.get('benefice_par_action') and compte_resultat.get('benefice_par_action') > 0:
-        ratios['per'] = bilan['cours_action'] / compte_resultat['benefice_par_action']
-    elif bilan.get('cours_action') and compte_resultat.get('resultat_net') and bilan.get('nb_actions') and bilan.get('nb_actions') > 0:
-        bpa = compte_resultat['resultat_net'] / bilan['nb_actions']
-        if bpa > 0:
-            ratios['per'] = bilan['cours_action'] / bpa
-            ratios['benefice_par_action'] = bpa
-    
-    if bilan.get('cours_action') and bilan.get('capitaux_propres_par_action') and bilan.get('capitaux_propres_par_action') > 0:
-        ratios['price_to_book'] = bilan['cours_action'] / bilan['capitaux_propres_par_action']
-    
-    if enterprise_value and ebitda > 0:
-        ratios['ev_ebitda'] = enterprise_value / ebitda
-    
-    if enterprise_value and compte_resultat.get('chiffre_affaires') and compte_resultat.get('chiffre_affaires') > 0:
-        ratios['ev_sales'] = enterprise_value / compte_resultat['chiffre_affaires']
-    
-    # ========== RATIOS DE FLUX DE TRÉSORERIE ==========
-    if flux_tresorerie.get('flux_exploitation') and compte_resultat.get('resultat_net') and compte_resultat.get('resultat_net') != 0:
-        ratios['qualite_benefices'] = flux_tresorerie['flux_exploitation'] / compte_resultat['resultat_net']
-    
-    if fcf and market_cap > 0:
-        ratios['fcf_yield'] = (fcf / market_cap) * 100
-    
-    if fcf and bilan.get('dettes_totales') and bilan.get('dettes_totales') > 0:
-        ratios['fcf_to_debt'] = fcf / bilan['dettes_totales']
-    
-    # ========== DONNÉES INTERMÉDIAIRES ==========
-    ratios['ebitda'] = ebitda
-    ratios['ebit'] = ebit
-    ratios['fcf'] = fcf
-    ratios['working_capital'] = working_capital
-    ratios['enterprise_value'] = enterprise_value
-    ratios['market_cap'] = market_cap
-    
-    return ratios
-
-def calculate_valuation_multiples(symbole, annee, ratios_entreprise, financial_data):
-    """Valorisation par multiples avec comparaison sectorielle (MÉDIANE)"""
-    secteur_multiples = {
-        'per': [],
-        'price_to_book': [],
-        'ev_ebitda': [],
-        'ev_sales': []
-    }
-    
-    # Parcourir toutes les données financières
-    for key, data in financial_data.items():
-        if key == f"{symbole}_{annee}":
-            continue
-        
-        ratios = data.get('ratios', {})
-        
-        if ratios.get('per') and 0 < ratios['per'] < 100:
-            secteur_multiples['per'].append(ratios['per'])
-        if ratios.get('price_to_book') and 0 < ratios['price_to_book'] < 20:
-            secteur_multiples['price_to_book'].append(ratios['price_to_book'])
-        if ratios.get('ev_ebitda') and 0 < ratios['ev_ebitda'] < 50:
-            secteur_multiples['ev_ebitda'].append(ratios['ev_ebitda'])
-        if ratios.get('ev_sales') and 0 < ratios['ev_sales'] < 10:
-            secteur_multiples['ev_sales'].append(ratios['ev_sales'])
-    
-    # Calculer les MÉDIANES
-    medianes = {}
-    for key, values in secteur_multiples.items():
-        if len(values) >= 2:
-            medianes[f"{key}_median"] = np.median(values)
-    
-    valorisations = {}
-    
-    # 1. Valorisation par P/E médian
-    if 'per_median' in medianes:
-        bpa = ratios_entreprise.get('benefice_par_action')
-        if not bpa and ratios_entreprise.get('resultat_net') and ratios_entreprise.get('nb_actions'):
-            bpa = ratios_entreprise['resultat_net'] / ratios_entreprise['nb_actions']
-        
-        if bpa:
-            juste_valeur_per = medianes['per_median'] * bpa
-            valorisations['juste_valeur_per'] = juste_valeur_per
-            cours_actuel = ratios_entreprise.get('cours_action', 0)
-            if cours_actuel > 0:
-                valorisations['ecart_per'] = ((juste_valeur_per - cours_actuel) / cours_actuel) * 100
-    
-    # 2. Valorisation par P/B médian
-    if 'price_to_book_median' in medianes:
-        if ratios_entreprise.get('capitaux_propres_par_action'):
-            cpa = ratios_entreprise['capitaux_propres_par_action']
-        elif ratios_entreprise.get('capitaux_propres') and ratios_entreprise.get('nb_actions'):
-            cpa = ratios_entreprise['capitaux_propres'] / ratios_entreprise['nb_actions']
-        else:
-            cpa = None
-        
-        if cpa:
-            juste_valeur_pb = medianes['price_to_book_median'] * cpa
-            valorisations['juste_valeur_pb'] = juste_valeur_pb
-            cours_actuel = ratios_entreprise.get('cours_action', 0)
-            if cours_actuel > 0:
-                valorisations['ecart_pb'] = ((juste_valeur_pb - cours_actuel) / cours_actuel) * 100
-    
-    # 3. Valorisation par EV/EBITDA médian
-    if 'ev_ebitda_median' in medianes and ratios_entreprise.get('ebitda'):
-        enterprise_value_juste = medianes['ev_ebitda_median'] * ratios_entreprise['ebitda']
-        dettes = ratios_entreprise.get('dettes_totales', 0)
-        tresorerie = ratios_entreprise.get('tresorerie', 0)
-        juste_valeur_ev = enterprise_value_juste - dettes + tresorerie
-        nb_actions = ratios_entreprise.get('nb_actions', 0)
-        
-        if nb_actions > 0:
-            juste_valeur_ev_par_action = juste_valeur_ev / nb_actions
-            valorisations['juste_valeur_ev_ebitda'] = juste_valeur_ev_par_action
-            cours_actuel = ratios_entreprise.get('cours_action', 0)
-            if cours_actuel > 0:
-                valorisations['ecart_ev_ebitda'] = ((juste_valeur_ev_par_action - cours_actuel) / cours_actuel) * 100
-    
-    valorisations['medianes_secteur'] = medianes
-    
-    # Calculer potentiel moyen
-    ecarts = [v for k, v in valorisations.items() if k.startswith('ecart_')]
-    if ecarts:
-        valorisations['potentiel_moyen'] = np.mean(ecarts)
-        valorisations['potentiel_median'] = np.median(ecarts)
-        
-        # RECOMMANDATION
-        potentiel = valorisations['potentiel_median']
-        if potentiel > 20:
-            valorisations['recommandation'] = "ACHAT FORT"
-            valorisations['justification'] = f"Sous-évalué de {potentiel:.1f}% par rapport aux pairs"
-        elif potentiel > 10:
-            valorisations['recommandation'] = "ACHAT"
-            valorisations['justification'] = f"Potentiel de hausse de {potentiel:.1f}%"
-        elif potentiel > -10:
-            valorisations['recommandation'] = "CONSERVER"
-            valorisations['justification'] = "Valorisation proche de la juste valeur"
-        elif potentiel > -20:
-            valorisations['recommandation'] = "VENTE"
-            valorisations['justification'] = f"Surévalué de {abs(potentiel):.1f}%"
-        else:
-            valorisations['recommandation'] = "VENTE FORTE"
-            valorisations['justification'] = f"Fortement surévalué de {abs(potentiel):.1f}%"
-    
-    return valorisations
-
-def calculate_financial_projections(symbole, financial_data, annees_projection=3):
-    """Projections financières pondérées : 40% TCAM + 60% Régression Linéaire"""
-    historique = []
-    for key, data in financial_data.items():
-        if data.get('symbole') == symbole:
-            annee = data.get('annee')
-            ca = data.get('compte_resultat', {}).get('chiffre_affaires', 0)
-            rn = data.get('compte_resultat', {}).get('resultat_net', 0)
-            if ca > 0 and rn != 0:
-                historique.append({
-                    'annee': int(annee),
-                    'ca': ca,
-                    'resultat_net': rn
-                })
-    
-    if len(historique) < 2:
-        return {"erreur": "Historique insuffisant (minimum 2 ans)"}
-    
-    historique = sorted(historique, key=lambda x: x['annee'])
-    annees = np.array([h['annee'] for h in historique]).reshape(-1, 1)
-    ca_values = np.array([h['ca'] for h in historique])
-    rn_values = np.array([h['resultat_net'] for h in historique])
-    
-    # TCAM
-    def calcul_tcam(valeur_debut, valeur_fin, nb_annees):
-        if valeur_debut <= 0:
-            return 0
-        return (pow(valeur_fin / valeur_debut, 1/nb_annees) - 1) * 100
-    
-    tcam_ca = calcul_tcam(ca_values[0], ca_values[-1], len(ca_values) - 1)
-    tcam_rn = calcul_tcam(abs(rn_values[0]), abs(rn_values[-1]), len(rn_values) - 1) if rn_values[0] != 0 else 0
-    
-    # RÉGRESSION LINÉAIRE
-    model_ca = LinearRegression()
-    model_ca.fit(annees, ca_values)
-    
-    model_rn = LinearRegression()
-    model_rn.fit(annees, rn_values)
-    
-    r2_ca = model_ca.score(annees, ca_values)
-    r2_rn = model_rn.score(annees, rn_values)
-    
-    # PROJECTIONS
-    projections = []
-    derniere_annee = historique[-1]['annee']
-    dernier_ca = historique[-1]['ca']
-    dernier_rn = historique[-1]['resultat_net']
-    
-    for i in range(1, annees_projection + 1):
-        annee_future = derniere_annee + i
-        
-        ca_tcam = dernier_ca * pow(1 + tcam_ca/100, i)
-        rn_tcam = dernier_rn * pow(1 + tcam_rn/100, i)
-        
-        ca_reg = model_ca.predict([[annee_future]])[0]
-        rn_reg = model_rn.predict([[annee_future]])[0]
-        ca_projete = 0.4 * ca_tcam + 0.6 * ca_reg
-        rn_projete = 0.4 * rn_tcam + 0.6 * rn_reg
-        
-        projections.append({
-            'annee': int(annee_future),
-            'ca_projete': float(ca_projete),
-            'rn_projete': float(rn_projete),
-            'marge_nette_projetee': float((rn_projete / ca_projete * 100) if ca_projete > 0 else 0)
-        })
-    
-    return {
-        'historique': historique,
-        'tcam_ca': float(tcam_ca),
-        'tcam_rn': float(tcam_rn),
-        'r2_ca': float(r2_ca),
-        'r2_rn': float(r2_rn),
-        'projections': projections,
-        'methode': '40% TCAM + 60% Régression Linéaire'
-    }
-
-# ===========================
-# FONCTIONS DE SCRAPING DES COURS
-# ===========================
-
-@st.cache_data(ttl=300)
-def scrape_brvm():
-    """Scrape les données de cours des actions depuis Sikafinance"""
-    url = "https://www.sikafinance.com/marches/aaz"
-    
+@st.cache_data(ttl=3600)
+def scrape_secteur_richbourse(url_secteur, nom_secteur):
+    """
+    Scrape les symboles et noms d'actions d'un secteur depuis Rich Bourse
+    """
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
         }
         
-        # Requête avec vérification SSL désactivée
-        response = requests.get(url, headers=headers, verify=False, timeout=15)
+        response = requests.get(url_secteur, headers=headers, verify=False, timeout=15)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Trouver toutes les tables
-        tables = soup.find_all('table')
+        # Trouver le tableau principal des actions
+        table = soup.find('table')
+        if not table:
+            return []
         
-        if len(tables) < 2:
-            return None, None
+        actions = []
+        tbody = table.find('tbody')
         
-        # Première table : Les indices
-        indices_table = tables[0]
-        indices_data = []
-        indices_headers = []
-        
-        # Extraire les en-têtes des indices
-        thead = indices_table.find('thead')
-        if thead:
-            for th in thead.find_all('th'):
-                indices_headers.append(th.get_text(strip=True))
-        else:
-            # Si pas de thead, prendre la première ligne comme en-tête
-            first_row = indices_table.find('tr')
-            if first_row:
-                for th in first_row.find_all(['th', 'td']):
-                    indices_headers.append(th.get_text(strip=True))
-        
-        # Extraire les données des indices
-        tbody = indices_table.find('tbody')
         if tbody:
             for row in tbody.find_all('tr'):
                 cols = row.find_all('td')
-                if cols and len(cols) > 0:
-                    row_data = [col.get_text(strip=True) for col in cols]
-                    indices_data.append(row_data)
+                
+                if len(cols) >= 3:
+                    symbole = cols[0].get_text(strip=True)
+                    nom_complet = cols[1].get_text(strip=True)
+                    
+                    if symbole and nom_complet and symbole != 'TOTAL':
+                        actions.append({
+                            'symbole': symbole,
+                            'nom': nom_complet,
+                            'secteur': nom_secteur
+                        })
         
-        # Deuxième table : Les actions
-        actions_table = tables[1]
-        actions_data = []
-        actions_headers = []
-        
-        # Extraire les en-têtes des actions
-        thead = actions_table.find('thead')
-        if thead:
-            for th in thead.find_all('th'):
-                actions_headers.append(th.get_text(strip=True))
-        else:
-            # Si pas de thead, prendre la première ligne comme en-tête
-            first_row = actions_table.find('tr')
-            if first_row:
-                for th in first_row.find_all(['th', 'td']):
-                    actions_headers.append(th.get_text(strip=True))
-        
-        # Extraire les données des actions
-        tbody = actions_table.find('tbody')
-        if tbody:
-            for row in tbody.find_all('tr'):
-                cols = row.find_all('td')
-                if cols and len(cols) > 0:
-                    row_data = [col.get_text(strip=True) for col in cols]
-                    actions_data.append(row_data)
-        
-        # Créer les DataFrames
-        df_indices = None
-        df_actions = None
-        
-        if indices_headers and indices_data:
-            df_indices = pd.DataFrame(indices_data, columns=indices_headers)
-        
-        if actions_headers and actions_data:
-            df_actions = pd.DataFrame(actions_data, columns=actions_headers)
-        
-        return df_indices, df_actions
+        return actions
     
     except Exception as e:
-        st.error(f"Erreur lors du scraping: {str(e)}")
-        return None, None
+        st.error(f"Erreur scraping secteur {nom_secteur}: {str(e)}")
+        return []
+
+@st.cache_data(ttl=3600)
+def scrape_tous_secteurs_richbourse():
+    """Scrape tous les secteurs Rich Bourse"""
+    mapping_secteurs = {}
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    total_secteurs = len(SECTEURS_RICHBOURSE)
+    
+    for idx, (nom_secteur, url) in enumerate(SECTEURS_RICHBOURSE.items()):
+        status_text.text(f"Scraping du secteur: {nom_secteur}...")
+        
+        actions = scrape_secteur_richbourse(url, nom_secteur)
+        
+        for action in actions:
+            mapping_secteurs[action['symbole']] = {
+                'nom': action['nom'],
+                'secteur': action['secteur']
+            }
+        
+        progress_bar.progress((idx + 1) / total_secteurs)
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return mapping_secteurs
+
+def get_secteur_by_symbole(symbole, mapping_secteurs):
+    """Retourne le secteur d'un symbole donné"""
+    if symbole in mapping_secteurs:
+        return mapping_secteurs[symbole]['secteur']
+    return "Non classifié"
+
+def get_nom_by_symbole(symbole, mapping_secteurs):
+    """Retourne le nom complet d'un symbole donné"""
+    if symbole in mapping_secteurs:
+        return mapping_secteurs[symbole]['nom']
+    return symbole
+
+def save_secteur_mapping(symbole, nom, secteur):
+    """Sauvegarder le mapping secteur dans Supabase"""
+    return save_symbol_mapping(symbole, nom, secteur)
+
+def save_all_secteurs_to_supabase(mapping_secteurs):
+    """Sauvegarder tous les secteurs scrapés dans Supabase"""
+    supabase = init_supabase()
+    if not supabase:
+        return 0, len(mapping_secteurs)
+    
+    success_count = 0
+    error_count = 0
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    total = len(mapping_secteurs)
+    
+    for idx, (symbole, info) in enumerate(mapping_secteurs.items()):
+        status_text.text(f"Sauvegarde: {symbole} - {info['nom']}...")
+        
+        if save_secteur_mapping(symbole, info['nom'], info['secteur']):
+            success_count += 1
+        else:
+            error_count += 1
+        
+        progress_bar.progress((idx + 1) / total)
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return success_count, error_count
+
+def load_secteurs_from_supabase():
+    """Charger les secteurs depuis Supabase"""
+    return load_symbol_mapping()
+
+def get_actions_by_secteur(secteur, financial_data, mapping_secteurs):
+    """Retourne toutes les actions d'un secteur donné"""
+    actions_secteur = []
+    
+    for symbole, info in mapping_secteurs.items():
+        if info.get('secteur') == secteur:
+            actions_secteur.append(symbole)
+    
+    return actions_secteur
+
+def get_stats_secteurs(financial_data, mapping_secteurs):
+    """Calcule les statistiques par secteur"""
+    stats = {}
+    
+    for symbole, info in mapping_secteurs.items():
+        secteur = info.get('secteur', 'Non classifié')
+        
+        if secteur not in stats:
+            stats[secteur] = {
+                'nb_entreprises': 0,
+                'entreprises': []
+            }
+        
+        stats[secteur]['nb_entreprises'] += 1
+        stats[secteur]['entreprises'].append(symbole)
+    
+    # Convertir en DataFrame
+    df_stats = pd.DataFrame([
+        {
+            'Secteur': secteur,
+            'Nombre d\'entreprises': data['nb_entreprises'],
+            'Entreprises': ', '.join(data['entreprises'][:5]) + ('...' if len(data['entreprises']) > 5 else '')
+        }
+        for secteur, data in stats.items()
+    ])
+    
+    return df_stats.sort_values('Nombre d\'entreprises', ascending=False)
 
 # ===========================
 # NAVIGATION STYLÉE
@@ -677,6 +464,7 @@ def page_accueil():
         - **🔍 Analyse fondamentale** : Ratios financiers et valorisation
         - **📊 Projections** : Scénarios futurs basés sur l'historique
         - **⚖️ Comparaisons sectorielles** : Multiples de valorisation
+        - **🏭 Classification sectorielle** : Import automatique depuis Rich Bourse
         """)
     
     with col2:
@@ -697,7 +485,7 @@ def page_accueil():
         entreprises = set([data['symbole'] for data in financial_data.values() if isinstance(data, dict)])
         total_donnees = len(financial_data)
         
-        col_stat1, col_stat2, col_stat3 = st.columns(3)
+        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
         
         with col_stat1:
             st.metric("Entreprises", len(entreprises))
@@ -708,6 +496,11 @@ def page_accueil():
         with col_stat3:
             if 'symbol_mapping' in st.session_state:
                 st.metric("Noms configurés", len(st.session_state.symbol_mapping))
+        
+        with col_stat4:
+            if 'symbol_mapping' in st.session_state:
+                secteurs = set([info.get('secteur', 'Non classifié') for info in st.session_state.symbol_mapping.values()])
+                st.metric("Secteurs", len(secteurs))
     else:
         st.info("Aucune donnée financière disponible. Rendez-vous dans la section Développeur pour configurer.")
 
@@ -812,18 +605,22 @@ def page_analyse():
     # Utiliser le mapping pour afficher des noms lisibles
     mapping = st.session_state.get('symbol_mapping', {})
     
-    # Créer les options avec format: "SNTS - Sonatel S.A." si mapping existe
+    # Créer les options avec format: "SNTS - Sonatel S.A. [Services publics]"
     options = []
     for symbole in symboles:
-        nom_complet = mapping.get(symbole, symbole)
-        options.append(f"{symbole} - {nom_complet}")
+        if symbole in mapping:
+            nom = mapping[symbole].get('nom', symbole)
+            secteur = mapping[symbole].get('secteur', 'Non classifié')
+            options.append(f"{symbole} - {nom} [{secteur}]")
+        else:
+            options.append(f"{symbole}")
     
     # Sélection de l'entreprise
     selected_option = st.selectbox("Choisissez une entreprise", [''] + options)
     
     if selected_option:
         # Extraire le symbole de l'option sélectionnée
-        symbole_selected = selected_option.split(" - ")[0]
+        symbole_selected = selected_option.split(" - ")[0].split(" [")[0]
         
         # Récupérer les données de cette entreprise
         symbole_data = {}
@@ -832,9 +629,13 @@ def page_analyse():
                 symbole_data[data['annee']] = data
         
         if symbole_data:
-            # Afficher le nom complet si disponible
-            nom_complet = mapping.get(symbole_selected, symbole_selected)
-            st.success(f"📊 Données disponibles pour {nom_complet}")
+            # Afficher le nom complet et secteur si disponible
+            if symbole_selected in mapping:
+                nom_complet = mapping[symbole_selected].get('nom', symbole_selected)
+                secteur = mapping[symbole_selected].get('secteur', 'Non classifié')
+                st.success(f"📊 {nom_complet} | 🏭 Secteur: {secteur}")
+            else:
+                st.success(f"📊 Données disponibles pour {symbole_selected}")
             
             # Sélection de l'année
             annees = sorted(symbole_data.keys())
@@ -954,9 +755,6 @@ def page_analyse():
                             df_cr = pd.DataFrame(list(data['compte_resultat'].items()), columns=['Poste', 'Valeur'])
                             st.dataframe(df_cr, use_container_width=True)
 
-# ===========================
-# SECTION DÉVELOPPEUR SIMPLIFIÉE
-# ===========================
 def developer_section():
     """Section réservée au développeur pour gérer les données"""
     st.title("⚙️ Section Développeur")
@@ -978,7 +776,7 @@ def developer_section():
     # Onglets développeur
     tab1, tab2, tab3 = st.tabs([
         "📊 Données Financières",
-        "🔤 Noms des Entreprises",
+        "🔤 Noms et Secteurs",
         "⚙️ Paramètres"
     ])
     
@@ -1074,10 +872,14 @@ def developer_section():
                 options = []
                 for key, data in financial_data.items():
                     if isinstance(data, dict):
-                        symbole = data.get('symbole', '')
-                        annee = data.get('annee', '')
-                        nom_complet = st.session_state.get('symbol_mapping', {}).get(symbole, symbole)
-                        options.append(f"{symbole} - {nom_complet} ({annee})")
+                        symbole_item = data.get('symbole', '')
+                        annee_item = data.get('annee', '')
+                        mapping = st.session_state.get('symbol_mapping', {})
+                        if symbole_item in mapping:
+                            nom_complet = mapping[symbole_item].get('nom', symbole_item)
+                        else:
+                            nom_complet = symbole_item
+                        options.append(f"{symbole_item} - {nom_complet} ({annee_item})")
                 
                 if options:
                     selected = st.selectbox("Sélectionnez les données à supprimer", options)
@@ -1085,11 +887,11 @@ def developer_section():
                     if selected and st.button("🗑️ Supprimer", type="secondary", use_container_width=True):
                         # Extraire symbole et année
                         parts = selected.split(" (")
-                        symbole = parts[0].split(" - ")[0]
-                        annee = parts[1].replace(")", "")
+                        symbole_del = parts[0].split(" - ")[0]
+                        annee_del = parts[1].replace(")", "")
                         
-                        if delete_financial_data(symbole, int(annee)):
-                            st.success(f"✅ Données supprimées pour {symbole} - {annee}")
+                        if delete_financial_data(symbole_del, int(annee_del)):
+                            st.success(f"✅ Données supprimées pour {symbole_del} - {annee_del}")
                             st.session_state.financial_data = load_all_financial_data()
                             st.rerun()
                         else:
@@ -1098,112 +900,88 @@ def developer_section():
                     st.info("📭 Aucune donnée à supprimer")
     
     with tab2:
-        st.header("Noms des Entreprises")
-        st.info("""
-        Associez un nom complet à chaque symbole BRVM pour améliorer l'interface.
-        Exemple: 
-        - Symbole: "SNTS" → Nom: "Sonatel S.A."
-        - Symbole: "SHEC" → Nom: "Vivo Energy Côte d'Ivoire"
-        """)
+        st.header("Noms et Secteurs des Entreprises")
         
-        # Afficher les mappings existants
-        symbol_mapping = load_symbol_mapping()
-        st.session_state.symbol_mapping = symbol_mapping
+        # Sous-onglets pour séparer scraping et gestion manuelle
+        subtab1, subtab2, subtab3 = st.tabs([
+            "🔄 Import Automatique (Rich Bourse)", 
+            "✏️ Gestion Manuelle",
+            "📊 Vue d'ensemble"
+        ])
         
-        if symbol_mapping:
-            st.subheader("Noms configurés")
-            df_mapping = pd.DataFrame(
-                [(k, v) for k, v in symbol_mapping.items()],
-                columns=["Symbole BRVM", "Nom Complet"]
-            )
-            st.dataframe(df_mapping, use_container_width=True)
-        
-        # Ajouter/Modifier un mapping
-        st.subheader("Ajouter/Modifier un nom")
-        
-        # Charger les symboles existants dans les données financières
-        financial_data = init_storage()
-        symboles_existants = sorted(set([data['symbole'] for data in financial_data.values() if isinstance(data, dict)]))
-        
-        col_map1, col_map2 = st.columns(2)
-        
-        with col_map1:
-            if symboles_existants:
-                symbole = st.selectbox("Symbole BRVM", [''] + symboles_existants)
-            else:
-                symbole = st.text_input("Symbole BRVM", placeholder="Ex: SNTS")
-        
-        with col_map2:
-            nom_complet = st.text_input("Nom complet de l'entreprise", 
-                                       placeholder="Ex: Sonatel S.A.")
-        
-        col_btn1, col_btn2 = st.columns(2)
-        
-        with col_btn1:
-            if st.button("💾 Sauvegarder", type="primary", use_container_width=True):
-                if symbole and nom_complet:
-                    if save_symbol_mapping(symbole, nom_complet):
-                        st.success(f"✅ Nom sauvegardé: {symbole} → {nom_complet}")
-                        st.session_state.symbol_mapping = load_symbol_mapping()
-                        st.rerun()
-                    else:
-                        st.error("❌ Erreur lors de la sauvegarde")
-                else:
-                    st.error("⚠️ Veuillez remplir tous les champs")
-        
-        with col_btn2:
-            if symbol_mapping and symbole in symbol_mapping:
-                if st.button("🗑️ Supprimer", type="secondary", use_container_width=True):
-                    if delete_symbol_mapping(symbole):
-                        st.success(f"✅ Nom supprimé pour {symbole}")
-                        st.session_state.symbol_mapping = load_symbol_mapping()
-                        st.rerun()
-                    else:
-                        st.error("❌ Erreur lors de la suppression")
-    
-    with tab3:
-        st.header("Paramètres")
-        
-        st.subheader("Configuration Supabase")
-        st.info(f"URL: {SUPABASE_URL}")
-        
-        if st.button("🔗 Tester la connexion Supabase", use_container_width=True):
-            supabase = init_supabase()
-            if supabase:
-                st.success("✅ Connexion Supabase active")
-            else:
-                st.error("❌ Erreur de connexion Supabase")
-        
-        st.subheader("Gestion du cache")
-        if st.button("🧹 Vider le cache", type="secondary", use_container_width=True):
-            st.cache_data.clear()
-            st.success("✅ Cache vidé")
-        
-        st.subheader("Déconnexion")
-        if st.button("🚪 Se déconnecter", type="secondary", use_container_width=True):
-            st.session_state.dev_authenticated = False
-            st.rerun()
-
-# ===========================
-# INTERFACE PRINCIPALE
-# ===========================
-def main():
-    if 'page' not in st.session_state:
-        st.session_state.page = 'accueil'
-    
-    render_navigation()
-    
-    if st.session_state.page == 'accueil':
-        page_accueil()
-    elif st.session_state.page == 'cours':
-        page_cours()
-    elif st.session_state.page == 'analyse':
-        page_analyse()
-    elif st.session_state.page == 'dev':
-        developer_section()
-    
-    st.markdown("---")
-    st.caption(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')} | Analyse BRVM Pro v1.0")
-
-if __name__ == "__main__":
-    main()
+        # ============= SOUS-ONGLET 1: IMPORT AUTOMATIQUE =============
+        with subtab1:
+            st.subheader("Import automatique depuis Rich Bourse")
+            
+            st.info("""
+            🎯 **Fonctionnalité automatique** : Récupère automatiquement les noms complets et les secteurs 
+            de toutes les entreprises BRVM depuis le site Rich Bourse.
+            
+            **Avantages** :
+            - ✅ Import en masse de tous les secteurs
+            - ✅ Données officielles et à jour
+            - ✅ Noms complets automatiques
+            - ✅ Classification sectorielle précise
+            """)
+            
+            col_scrape1, col_scrape2 = st.columns(2)
+            
+            with col_scrape1:
+                if st.button("🔄 Scanner Rich Bourse", type="primary", use_container_width=True):
+                    with st.spinner("Scraping en cours..."):
+                        mapping_secteurs = scrape_tous_secteurs_richbourse()
+                        
+                        if mapping_secteurs:
+                            st.session_state['mapping_secteurs_temp'] = mapping_secteurs
+                            st.success(f"✅ {len(mapping_secteurs)} entreprises trouvées!")
+                            
+                            # Afficher un aperçu
+                            st.markdown("### 📋 Aperçu des données récupérées")
+                            df_preview = pd.DataFrame([
+                                {
+                                    'Symbole': symbole,
+                                    'Nom complet': info['nom'],
+                                    'Secteur': info['secteur']
+                                }
+                                for symbole, info in list(mapping_secteurs.items())[:10]
+                            ])
+                            st.dataframe(df_preview, use_container_width=True)
+                            
+                            if len(mapping_secteurs) > 10:
+                                st.caption(f"... et {len(mapping_secteurs) - 10} autres entreprises")
+                        else:
+                            st.error("❌ Aucune donnée récupérée")
+            
+            with col_scrape2:
+                if 'mapping_secteurs_temp' in st.session_state:
+                    if st.button("💾 Sauvegarder dans Supabase", type="secondary", use_container_width=True):
+                        mapping = st.session_state['mapping_secteurs_temp']
+                        
+                        with st.spinner("Sauvegarde en cours..."):
+                            success, errors = save_all_secteurs_to_supabase(mapping)
+                        
+                        if errors == 0:
+                            st.success(f"✅ Toutes les données sauvegardées ({success} entreprises)")
+                            # Recharger le mapping
+                            st.session_state.symbol_mapping = load_symbol_mapping()
+                            del st.session_state['mapping_secteurs_temp']
+                            st.rerun()
+                        else:
+                            st.warning(f"⚠️ {success} réussies, {errors} erreurs")
+            
+            # Statistiques par secteur
+            if 'mapping_secteurs_temp' in st.session_state:
+                st.markdown("---")
+                st.subheader("📊 Répartition par secteur")
+                
+                mapping = st.session_state['mapping_secteurs_temp']
+                secteurs_count = {}
+                
+                for info in mapping.values():
+                    secteur = info['secteur']
+                    secteurs_count[secteur] = secteurs_count.get(secteur, 0) + 1
+                
+                df_secteurs = pd.DataFrame([
+                    {'Secteur': k, 'Nombre d\'entreprises': v}
+                    for k, v in secteurs_count.items()
+                ]).sort_values
