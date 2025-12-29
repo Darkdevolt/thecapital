@@ -22,8 +22,75 @@ DEVELOPER_PASSWORD = "dev_brvm_2024"
 # ===========================
 # CONFIGURATION SUPABASE
 # ===========================
-SUPABASE_URL = "https://otsiwiwhowxeolbbgvm.supabase.co"
-SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5iliNOJ4P3Q_xGTsJAFJ"
+SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
+SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
+
+# Dictionnaire de mapping des symboles (sera chargé depuis Supabase)
+def load_symbol_mapping():
+    """Charger le mapping des symboles depuis Supabase"""
+    supabase = init_supabase()
+    if not supabase:
+        return {}
+    
+    try:
+        response = supabase.table("symbol_mapping").select("*").execute()
+        mapping = {}
+        for record in response.data:
+            mapping[record['entreprise_nom']] = record['symbole']
+        return mapping
+    except Exception as e:
+        st.error(f"Erreur de chargement du mapping: {str(e)}")
+        return {}
+
+def save_symbol_mapping(entreprise_nom, symbole):
+    """Sauvegarder un mapping dans Supabase"""
+    supabase = init_supabase()
+    if not supabase:
+        return False
+    
+    try:
+        record = {
+            'entreprise_nom': entreprise_nom,
+            'symbole': symbole,
+            'last_update': datetime.now().isoformat()
+        }
+        
+        # Vérifier si l'entrée existe déjà
+        existing = supabase.table("symbol_mapping")\
+            .select("*")\
+            .eq("entreprise_nom", entreprise_nom)\
+            .execute()
+        
+        if existing.data:
+            # Mise à jour
+            response = supabase.table("symbol_mapping")\
+                .update(record)\
+                .eq("entreprise_nom", entreprise_nom)\
+                .execute()
+        else:
+            # Insertion
+            response = supabase.table("symbol_mapping").insert(record).execute()
+        
+        return True
+    except Exception as e:
+        st.error(f"Erreur de sauvegarde du mapping: {str(e)}")
+        return False
+
+def delete_symbol_mapping(entreprise_nom):
+    """Supprimer un mapping de Supabase"""
+    supabase = init_supabase()
+    if not supabase:
+        return False
+    
+    try:
+        response = supabase.table("symbol_mapping")\
+            .delete()\
+            .eq("entreprise_nom", entreprise_nom)\
+            .execute()
+        return True
+    except Exception as e:
+        st.error(f"Erreur de suppression du mapping: {str(e)}")
+        return False
 
 def init_supabase():
     """Initialiser la connexion à Supabase"""
@@ -123,6 +190,8 @@ def init_storage():
     """Initialiser le stockage avec Supabase"""
     if 'financial_data' not in st.session_state:
         st.session_state.financial_data = load_all_financial_data()
+    if 'symbol_mapping' not in st.session_state:
+        st.session_state.symbol_mapping = load_symbol_mapping()
     return st.session_state.financial_data
 
 # ===========================
@@ -418,179 +487,96 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
         'projections': projections,
         'methode': '40% TCAM + 60% Régression Linéaire'
     }
+
 # ===========================
-# FONCTIONS DE SCRAPING BRVM
+# FONCTIONS DE SCRAPING SIKA FINANCE
 # ===========================
 @st.cache_data(ttl=300)
-def scrape_brvm():
-    """Scrape les données de cours des actions depuis BRVM"""
-    url = "https://www.brvm.org/fr/cours-actions/0"
-    
+def scrape_sika_finance(entreprise_url):
+    """Scraper les données financières depuis Sika Finance"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(entreprise_url, headers=headers, timeout=10)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Trouver le tableau des cours
-        table = soup.find('table')
+        # Ici, vous devez adapter le scraping selon la structure de Sika Finance
+        # Ceci est un exemple générique - à adapter selon la structure réelle du site
         
-        if not table:
-            return None
-        
-        # Extraire les en-têtes
-        headers = []
-        thead = table.find('thead')
-        if thead:
-            for th in thead.find_all('th'):
-                headers.append(th.get_text(strip=True))
-        
-        # Extraire les données
-        data = []
-        tbody = table.find('tbody')
-        if tbody:
-            for row in tbody.find_all('tr'):
-                cols = row.find_all('td')
-                if cols:
-                    row_data = [col.get_text(strip=True) for col in cols]
-                    data.append(row_data)
-        
-        if not headers or not data:
-            return None
-        
-        # Créer le DataFrame
-        df = pd.DataFrame(data, columns=headers)
-        
-        return df
-    
-    except Exception as e:
-        st.error(f"Erreur lors du scraping: {str(e)}")
-        return None
-
-@st.cache_data(ttl=300)
-def scrape_brvm_secteurs():
-    """Récupère les données par secteur depuis BRVM"""
-    url = "https://www.brvm.org/fr/cours-actions/0"
-    
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        data = {
+            'bilan': {},
+            'compte_resultat': {},
+            'flux_tresorerie': {},
+            'informations_generales': {}
         }
         
-        session = requests.Session()
-        response = session.get(url, headers=headers, timeout=20, verify=False)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # Exemple de scraping - à adapter
+        # Trouver les tableaux financiers
         tables = soup.find_all('table')
         
-        if not tables:
-            return None
+        for table in tables:
+            caption = table.find('caption')
+            if caption:
+                caption_text = caption.get_text(strip=True).lower()
+                
+                # Adapter ces conditions selon la structure de Sika Finance
+                if 'bilan' in caption_text:
+                    # Extraire les données du bilan
+                    rows = table.find_all('tr')
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 2:
+                            label = cells[0].get_text(strip=True)
+                            value = cells[1].get_text(strip=True)
+                            # Nettoyer et convertir la valeur
+                            value = value.replace(' ', '').replace(',', '.')
+                            try:
+                                if 'M' in value or 'm' in value:
+                                    value = float(value.replace('M', '').replace('m', '')) * 1000000
+                                elif 'K' in value or 'k' in value:
+                                    value = float(value.replace('K', '').replace('k', '')) * 1000
+                                else:
+                                    value = float(value)
+                                data['bilan'][label] = value
+                            except:
+                                pass
+                
+                elif 'compte de résultat' in caption_text or 'resultat' in caption_text:
+                    # Extraire les données du compte de résultat
+                    rows = table.find_all('tr')
+                    for row in rows:
+                        cells = row.find_all('td')
+                        if len(cells) >= 2:
+                            label = cells[0].get_text(strip=True)
+                            value = cells[1].get_text(strip=True)
+                            # Nettoyer et convertir la valeur
+                            value = value.replace(' ', '').replace(',', '.')
+                            try:
+                                if 'M' in value or 'm' in value:
+                                    value = float(value.replace('M', '').replace('m', '')) * 1000000
+                                elif 'K' in value or 'k' in value:
+                                    value = float(value.replace('K', '').replace('k', '')) * 1000
+                                else:
+                                    value = float(value)
+                                data['compte_resultat'][label] = value
+                            except:
+                                pass
         
-        # Chercher le tableau principal
-        table = None
-        for t in tables:
-            rows = t.find_all('tr')
-            if len(rows) > 1:
-                table = t
-                break
-        
-        if not table:
-            return None
-        
-        rows = table.find_all('tr')
-        headers_row = rows[0]
-        headers_list = [th.get_text(strip=True) for th in headers_row.find_all(['th', 'td'])]
-        
-        data = []
-        for row in rows[1:]:
-            cells = row.find_all(['td', 'th'])
-            if cells:
-                row_data = [cell.get_text(strip=True) for cell in cells]
-                if len(row_data) >= 2:
-                    data.append(row_data)
-
-        if not data:
-            return None
-        
-        max_cols = max(len(row) for row in data)
-        if len(headers_list) < max_cols:
-            headers_list.extend([f'Col_{i}' for i in range(len(headers_list), max_cols)])
-        
-        df = pd.DataFrame(data, columns=headers_list[:max_cols])
-        df = clean_dataframe(df)
-        
-        # Ajouter une colonne secteur par défaut si elle n'existe pas
-        if 'Secteur' not in df.columns:
-            df['Secteur'] = 'Non classé'
-        
-        return df
-        
+        return data
+    
     except Exception as e:
-        st.error(f"  Erreur scraping secteurs : {str(e)}")
+        st.error(f"Erreur lors du scraping Sika Finance: {str(e)}")
         return None
 
-@st.cache_data(ttl=300)
-def get_brvm_data_fallback():
-    """Données de test si le scraping échoue"""
-    data = {
-        'Symbole': ['SNTS', 'SGBC', 'BICC', 'ONTBF', 'CABC', 'SDCC', 'SIVC', 'BOAB'],
-        'Nom': ['Sonatel', 'SGB', 'BICICI', 'ONATEL', 'CBAO', 'SODE', 'SIVAC', 'BOA Benin'],
-        'Volume': [1250, 3400, 890, 2100, 1670, 540, 780, 920],
-        'Cours veille (FCFA)': [18500, 7200, 8900, 3450, 6780, 2340, 4560, 5670],
-        'Cours Ouverture (FCFA)': [18500, 7200, 8900, 3450, 6780, 2340, 4560, 5670],
-        'Cours Clôture (FCFA)': [18750, 7100, 9100, 3500, 6850, 2300, 4600, 5700],
-        'Variation (%)': [1.35, -1.39, 2.25, 1.45, 1.03, -1.71, 0.88, 0.53]
-    }
-    df = pd.DataFrame(data)
-    return df
-
-def get_brvm_cours():
-    """Essaie de scraper, sinon utilise des données de test"""
-    df = scrape_brvm()
-    if df is None or len(df) == 0:
-        st.warning("  Scraping échoué - Utilisation de données de démonstration")
-        st.info("  Vérifiez votre connexion internet ou réessayez plus tard")
-        df = get_brvm_data_fallback()
-    return df
-
-def clean_dataframe(df):
-    """Nettoie le DataFrame - Version améliorée"""
-    if df.empty:
-        return df
-    
-    df = df.copy()
-    df.columns = [str(col).strip() for col in df.columns]
-    
-    numeric_keywords = ['Cours', 'Volume', 'Variation', 'Capitalisation', 'Prix', 'Montant']
-    numeric_columns = []
-    
-    for col in df.columns:
-        if any(keyword in str(col) for keyword in numeric_keywords):
-            numeric_columns.append(col)
-    
-    for col in numeric_columns:
-        if col in df.columns:
-            df[col] = df[col].astype(str)
-            df[col] = df[col].str.replace(',', '.')
-            df[col] = df[col].str.replace(' ', '')
-            df[col] = df[col].str.replace('FCFA', '')
-            df[col] = df[col].str.replace('F', '')
-            df[col] = df[col].str.replace('CFA', '')
-            df[col] = df[col].str.replace('%', '')
-            df[col] = df[col].str.replace('€', '')
-            df[col] = df[col].str.replace('$', '')
-            df[col] = df[col].str.replace('+', '')
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    if 'Symbole' in df.columns:
-        df = df.sort_values('Symbole').reset_index(drop=True)
-    
-    return df
+def get_sika_finance_url(entreprise_nom):
+    """Construire l'URL Sika Finance à partir du nom de l'entreprise"""
+    # Cette fonction doit être adaptée selon la structure des URLs Sika Finance
+    # Exemple: convertir "VIVO ENERGY CI" en "vivo-energy-ci"
+    nom_formate = entreprise_nom.lower().replace(' ', '-').replace('.', '').replace(',', '')
+    return f"https://www.sika-finance.com/entreprises/{nom_formate}"
 
 # ===========================
 # NAVIGATION STYLÉE
@@ -662,7 +648,7 @@ def render_navigation():
     st.markdown("---")
 
 # ===========================
-# PAGE ACCUEIL
+# PAGES SIMPLIFIÉES (sans scraping BRVM)
 # ===========================
 def page_accueil():
     st.title("  Accueil - Analyse BRVM Pro")
@@ -676,210 +662,124 @@ def page_accueil():
         **Votre outil complet d'analyse de la Bourse Régionale des Valeurs Mobilières**
         
         #### Fonctionnalités principales :
-        - **Cours en temps réel** : Tous les titres BRVM
-        - **Analyse par secteur** : 7 secteurs économiques
         - **Analyse fondamentale** : Ratios, scores, valorisation
         - **Projections** : Scénarios futurs basés sur l'historique
         - **Alertes** : Détection automatique des risques
+        - **Données Sika Finance** : Importation automatique depuis Sika Finance
         """)
     
     with col2:
         st.markdown("""
         ###   Comment utiliser l'application ?
         
-        1. **Cours** : Consultez les cours actuels de tous les titres
-        2. **Secteurs** : Analysez les performances par secteur
-        3. **Analyse** : Sélectionnez un titre pour analyse approfondie
-        4. **Développeur** : Saisissez des données financières
+        1. **Développeur** : Configurez les entreprises et importez les données
+        2. **Analyse** : Sélectionnez un titre pour analyse approfondie
+        3. **Données** : Visualisez les données financières importées
         """)
-        st.info("  **Astuce** : Les données sont mises à jour toutes les 5 minutes")
+        st.info("  **Astuce** : Configurez d'abord vos entreprises dans la section Développeur")
     
     st.markdown("---")
-    st.subheader("  Statistiques du jour")
+    st.subheader("  Statistiques")
     
-    with st.spinner("Chargement..."):
-        df = get_brvm_cours()
-        if df is not None:
-            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
-            
-            with col_stat1:
-                st.metric("Titres cotés", len(df))
-            
-            with col_stat2:
-                if 'Variation (%)' in df.columns:
-                    hausse = len(df[df['Variation (%)'] > 0])
-                    st.metric("En hausse", hausse, f"+{hausse}")
-            
-            with col_stat3:
-                if 'Variation (%)' in df.columns:
-                    baisse = len(df[df['Variation (%)'] < 0])
-                    st.metric("En baisse", baisse, f"-{baisse}")
-            
-            with col_stat4:
-                if 'Variation (%)' in df.columns:
-                    stable = len(df[df['Variation (%)'] == 0])
-                    st.metric("Stables", stable)
-
-# ===========================
-# PAGE COURS
-# ===========================
-def page_cours():
-    st.title("  Cours des Actions BRVM")
-    
-    # Bouton de rafraîchissement
-    col1, col2, col3 = st.columns([1, 1, 4])
-    with col1:
-        if st.button("🔄 Rafraîchir", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
-    with col2:
-        st.info(f"⏰ {datetime.now().strftime('%H:%M:%S')}")
-
-    st.markdown("---")
-
-    # Scraper et afficher les données
-    with st.spinner("Chargement des données de la BRVM..."):
-        df = scrape_brvm()
-    
-    if df is not None and not df.empty:
-        st.success(f"✅ {len(df)} actions chargées avec succès")
+    financial_data = init_storage()
+    if financial_data:
+        entreprises = set([data['symbole'] for data in financial_data.values() if isinstance(data, dict)])
+        total_donnees = len(financial_data)
         
-        # Afficher les statistiques
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Nombre d'actions", len(df))
-        with col2:
-            st.metric("Dernière mise à jour", datetime.now().strftime('%d/%m/%Y'))
-        with col3:
-            st.metric("Source", "BRVM.org")
+        col_stat1, col_stat2, col_stat3 = st.columns(3)
         
-        st.markdown("---")
+        with col_stat1:
+            st.metric("Entreprises configurées", len(entreprises))
         
-        # Filtre de recherche
-        search = st.text_input("🔍 Rechercher une action", placeholder="Entrez le nom ou le symbole...")
+        with col_stat2:
+            st.metric("Données financières", total_donnees)
         
-        if search:
-            # Filtrer sur toutes les colonnes
-            mask = df.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
-            filtered_df = df[mask]
-            st.info(f"🔎 {len(filtered_df)} résultat(s) trouvé(s)")
-        else:
-            filtered_df = df
-        
-        # Afficher le tableau
-        st.dataframe(
-            filtered_df,
-            use_container_width=True,
-            height=600,
-            hide_index=True
-        )
-        
-        # Bouton de téléchargement
-        csv = filtered_df.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button(
-            label="📥 Télécharger en CSV",
-            data=csv,
-            file_name=f"brvm_cours_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
-        )
-        
+        with col_stat3:
+            if 'symbol_mapping' in st.session_state:
+                st.metric("Mappings de symboles", len(st.session_state.symbol_mapping))
     else:
-        st.error("❌ Impossible de charger les données. Veuillez réessayer plus tard.")
-        st.info("💡 Le site BRVM peut être temporairement indisponible ou la structure de la page a changé.")
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style='text-align: center; color: #666;'>
-        <small>Données provenant de <a href='https://www.brvm.org' target='_blank'>BRVM.org</a> | 
-        Mise à jour automatique toutes les 5 minutes</small>
-    </div>
-    """, unsafe_allow_html=True)
+        st.info("Aucune donnée financière disponible. Rendez-vous dans la section Développeur pour configurer.")
 
-# ===========================
-# PAGE SECTEURS
-# ===========================
+def page_cours():
+    st.title("  Données de Marché")
+    st.info("  ⚠️ Cette fonctionnalité nécessite une source de données de marché externe")
+    
+    st.warning("""
+    La récupération des cours en direct depuis BRVM est temporairement désactivée.
+    
+    **Alternatives disponibles :**
+    1. Utilisez la section **Analyse** pour les données fondamentales
+    2. Importez manuellement les données via la section **Développeur**
+    3. Configurez une source de données alternative
+    """)
+    
+    # Afficher les entreprises configurées
+    financial_data = init_storage()
+    if financial_data and len(financial_data) > 0:
+        st.subheader("  Entreprises disponibles dans la base")
+        
+        entreprises_info = []
+        for key, data in financial_data.items():
+            if isinstance(data, dict):
+                derniere_annee = data.get('annee', 'N/A')
+                entreprises_info.append({
+                    'Symbole': data.get('symbole', 'N/A'),
+                    'Année': derniere_annee,
+                    'Clé': key
+                })
+        
+        if entreprises_info:
+            df_entreprises = pd.DataFrame(entreprises_info)
+            st.dataframe(df_entreprises, use_container_width=True)
+
 def page_secteurs():
     st.title("  Analyse par Secteur")
     
-    col_refresh, col_info = st.columns([1, 3])
+    st.info("  ⚠️ Cette fonctionnalité nécessite une classification sectorielle")
     
-    with col_refresh:
-        if st.button("  Actualiser", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-    
-    with col_info:
-        st.info("  Classification sectorielle officielle BRVM")
-    
-    with st.spinner("  Chargement des secteurs..."):
-        df = scrape_brvm_secteurs()
+    financial_data = init_storage()
+    if financial_data and len(financial_data) > 0:
+        # Créer une classification sectorielle basique
+        st.subheader("  Données financières par entreprise")
         
-        if df is not None:
-            st.subheader("  Répartition par secteur")
+        # Grouper par symbole
+        entreprises_data = {}
+        for key, data in financial_data.items():
+            if isinstance(data, dict):
+                symbole = data.get('symbole')
+                if symbole not in entreprises_data:
+                    entreprises_data[symbole] = []
+                entreprises_data[symbole].append(data)
+        
+        # Afficher un sélecteur d'entreprise
+        if entreprises_data:
+            symboles = list(entreprises_data.keys())
+            symbole_selected = st.selectbox("Sélectionnez une entreprise", symboles)
             
-            if 'Secteur' in df.columns:
-                secteur_counts = df['Secteur'].value_counts()
-                col_graph, col_table = st.columns([2, 1])
+            if symbole_selected:
+                st.subheader(f"Données pour {symbole_selected}")
                 
-                with col_graph:
-                    import plotly.express as px
-                    fig = px.pie(
-                        values=secteur_counts.values,
-                        names=secteur_counts.index,
-                        title='Nombre de sociétés par secteur',
-                        hole=0.4
-                    )
-                    fig.update_traces(textposition='inside', textinfo='percent+label')
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col_table:
-                    st.markdown("**Détails :**")
-                    for secteur, count in secteur_counts.items():
-                        st.metric(secteur, count)
-            
-            st.markdown("---")
-            st.subheader("  Filtrer par secteur")
-            
-            if 'Secteur' in df.columns:
-                secteurs = ['Tous'] + sorted(df['Secteur'].unique().tolist())
-                secteur_selected = st.selectbox("Choisissez un secteur", secteurs)
-                
-                if secteur_selected != 'Tous':
-                    df_filtre = df[df['Secteur'] == secteur_selected]
-                else:
-                    df_filtre = df
-            else:
-                df_filtre = df
-            
-            st.dataframe(df_filtre, use_container_width=True, height=400)
-            
-            if 'Secteur' in df.columns and 'Variation (%)' in df.columns:
-                st.markdown("---")
-                st.subheader("  Performance moyenne par secteur")
-                
-                perf = df.groupby('Secteur')['Variation (%)'].agg(['mean', 'count']).reset_index()
-                perf.columns = ['Secteur', 'Variation Moyenne (%)', 'Nombre']
-                perf = perf.sort_values('Variation Moyenne (%)', ascending=False)
-                
-                import plotly.express as px
-                fig = px.bar(
-                    perf,
-                    x='Secteur',
-                    y='Variation Moyenne (%)',
-                    color='Variation Moyenne (%)',
-                    color_continuous_scale=['red', 'yellow', 'green'],
-                    color_continuous_midpoint=0,
-                    title='Performance moyenne par secteur'
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.error("  Impossible de charger les données secteurs")
+                # Afficher les années disponibles
+                annees_data = entreprises_data[symbole_selected]
+                for data in annees_data:
+                    annee = data.get('annee')
+                    avec st.expander(f"Année {annee}"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if data.get('bilan'):
+                                st.markdown("**Bilan**")
+                                for k, v in data['bilan'].items():
+                                    if isinstance(v, (int, float)):
+                                        st.text(f"{k}: {v:,.0f}")
+                        
+                        with col2:
+                            if data.get('compte_resultat'):
+                                st.markdown("**Compte de résultat**")
+                                for k, v in data['compte_resultat'].items():
+                                    if isinstance(v, (int, float)):
+                                        st.text(f"{k}: {v:,.0f}")
 
-# ===========================
-# PAGE ANALYSE
-# ===========================
 def page_analyse():
     st.title("  Analyse Fondamentale")
     st.info("  Sélectionnez un titre pour voir son analyse complète")
@@ -981,11 +881,11 @@ def page_analyse():
         st.warning("Aucune donnée financière disponible")
 
 # ===========================
-# SECTION DÉVELOPPEUR (Extrait simplifié)
+# SECTION DÉVELOPPEUR AMÉLIORÉE
 # ===========================
 def developer_section():
-    """Section réservée au développeur pour gérer les données financières"""
-    st.title("  Section Développeur - Gestion des Données Financières")
+    """Section réservée au développeur pour gérer les données financières et les mappings"""
+    st.title("  Section Développeur - Gestion des Données")
     
     if 'dev_authenticated' not in st.session_state:
         st.session_state.dev_authenticated = False
@@ -1000,10 +900,283 @@ def developer_section():
         return
     
     st.success("  Connecté en tant que développeur")
-    st.info("  Interface de gestion des données financières")
     
-    # Le reste du code de la section développeur reste identique au code original
-    # Je l'ai omis ici pour respecter la limite de longueur, mais il fonctionne tel quel
+    # Onglets pour la section développeur
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Gestion des Données Financières",
+        "🔗 Mapping des Symboles",
+        "🌐 Import Sika Finance",
+        "⚙️ Paramètres"
+    ])
+    
+    with tab1:
+        st.header("Gestion des Données Financières")
+        
+        # Section pour ajouter/supprimer des données manuellement
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Ajouter des données")
+            symbole = st.text_input("Symbole (ex: SHEC)", key="dev_symbole")
+            annee = st.number_input("Année", min_value=2000, max_value=2030, value=2023, key="dev_annee")
+            
+            with st.expander("Bilan"):
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    actif_total = st.number_input("Actif Total", value=0.0, key="bilan_actif_total")
+                    actif_courant = st.number_input("Actif Courant", value=0.0, key="bilan_actif_courant")
+                    stocks = st.number_input("Stocks", value=0.0, key="bilan_stocks")
+                    creances = st.number_input("Créances", value=0.0, key="bilan_creances")
+                    tresorerie = st.number_input("Trésorerie", value=0.0, key="bilan_tresorerie")
+                
+                with col_b2:
+                    capitaux_propres = st.number_input("Capitaux Propres", value=0.0, key="bilan_capitaux_propres")
+                    dettes_totales = st.number_input("Dettes Totales", value=0.0, key="bilan_dettes_totales")
+                    passif_courant = st.number_input("Passif Courant", value=0.0, key="bilan_passif_courant")
+                    cours_action = st.number_input("Cours Action", value=0.0, key="bilan_cours_action")
+                    nb_actions = st.number_input("Nombre d'Actions", value=0.0, key="bilan_nb_actions")
+            
+            with st.expander("Compte de Résultat"):
+                chiffre_affaires = st.number_input("Chiffre d'Affaires", value=0.0, key="cr_chiffre_affaires")
+                resultat_exploitation = st.number_input("Résultat Exploitation", value=0.0, key="cr_resultat_exploitation")
+                resultat_net = st.number_input("Résultat Net", value=0.0, key="cr_resultat_net")
+                charges_financieres = st.number_input("Charges Financières", value=0.0, key="cr_charges_financieres")
+                benefice_par_action = st.number_input("Bénéfice par Action", value=0.0, key="cr_benefice_par_action")
+            
+            with st.expander("Flux de Trésorerie"):
+                flux_exploitation = st.number_input("Flux d'Exploitation", value=0.0, key="ft_flux_exploitation")
+                flux_investissement = st.number_input("Flux d'Investissement", value=0.0, key="ft_flux_investissement")
+                flux_financement = st.number_input("Flux de Financement", value=0.0, key="ft_flux_financement")
+            
+            if st.button("Sauvegarder les Données", type="primary"):
+                if symbole and annee:
+                    data_dict = {
+                        'bilan': {
+                            'actif_total': actif_total,
+                            'actif_courant': actif_courant,
+                            'stocks': stocks,
+                            'creances': creances,
+                            'tresorerie': tresorerie,
+                            'capitaux_propres': capitaux_propres,
+                            'dettes_totales': dettes_totales,
+                            'passif_courant': passif_courant,
+                            'cours_action': cours_action,
+                            'nb_actions': nb_actions
+                        },
+                        'compte_resultat': {
+                            'chiffre_affaires': chiffre_affaires,
+                            'resultat_exploitation': resultat_exploitation,
+                            'resultat_net': resultat_net,
+                            'charges_financieres': charges_financieres,
+                            'benefice_par_action': benefice_par_action
+                        },
+                        'flux_tresorerie': {
+                            'flux_exploitation': flux_exploitation,
+                            'flux_investissement': flux_investissement,
+                            'flux_financement': flux_financement
+                        }
+                    }
+                    
+                    # Calculer les ratios
+                    ratios = calculate_enhanced_financial_ratios(
+                        data_dict['bilan'],
+                        data_dict['compte_resultat'],
+                        data_dict['flux_tresorerie']
+                    )
+                    data_dict['ratios'] = ratios
+                    
+                    if save_financial_data(symbole, annee, data_dict):
+                        st.success(f"Données sauvegardées pour {symbole} - {annee}")
+                        # Recharger les données
+                        st.session_state.financial_data = load_all_financial_data()
+                        st.rerun()
+                    else:
+                        st.error("Erreur lors de la sauvegarde")
+                else:
+                    st.error("Veuillez remplir le symbole et l'année")
+        
+        with col2:
+            st.subheader("Supprimer des données")
+            
+            # Charger les données existantes
+            financial_data = init_storage()
+            if financial_data:
+                options = []
+                for key, data in financial_data.items():
+                    if isinstance(data, dict):
+                        options.append(f"{data.get('symbole')} - {data.get('annee')} (clé: {key})")
+                
+                if options:
+                    selected = st.selectbox("Sélectionnez les données à supprimer", options)
+                    
+                    if selected and st.button("Supprimer", type="secondary"):
+                        # Extraire la clé
+                        key = selected.split("(clé: ")[1].replace(")", "")
+                        symbole = key.split("_")[0]
+                        annee = key.split("_")[1]
+                        
+                        if delete_financial_data(symbole, annee):
+                            st.success(f"Données supprimées pour {symbole} - {annee}")
+                            # Recharger les données
+                            st.session_state.financial_data = load_all_financial_data()
+                            st.rerun()
+                        else:
+                            st.error("Erreur lors de la suppression")
+                else:
+                    st.info("Aucune donnée à supprimer")
+    
+    with tab2:
+        st.header("Mapping des Symboles")
+        st.info("""
+        Associez les noms d'entreprises de Sika Finance aux codes symboles BRVM.
+        Exemple: "VIVO ENERGY CI" → "SHEC"
+        """)
+        
+        # Afficher les mappings existants
+        symbol_mapping = load_symbol_mapping()
+        st.session_state.symbol_mapping = symbol_mapping
+        
+        if symbol_mapping:
+            st.subheader("Mappings existants")
+            df_mapping = pd.DataFrame(
+                [(k, v) for k, v in symbol_mapping.items()],
+                columns=["Nom Sika Finance", "Symbole BRVM"]
+            )
+            st.dataframe(df_mapping, use_container_width=True)
+        
+        # Ajouter un nouveau mapping
+        st.subheader("Ajouter/Modifier un mapping")
+        col_map1, col_map2 = st.columns(2)
+        
+        with col_map1:
+            entreprise_nom = st.text_input("Nom de l'entreprise (Sika Finance)", 
+                                          placeholder="Ex: VIVO ENERGY CI")
+        
+        with col_map2:
+            symbole_brvm = st.text_input("Symbole BRVM", 
+                                        placeholder="Ex: SHEC")
+        
+        col_btn1, col_btn2 = st.columns(2)
+        
+        with col_btn1:
+            if st.button("Sauvegarder le mapping", type="primary"):
+                if entreprise_nom and symbole_brvm:
+                    if save_symbol_mapping(entreprise_nom, symbole_brvm):
+                        st.success(f"Mapping sauvegardé: {entreprise_nom} → {symbole_brvm}")
+                        st.session_state.symbol_mapping = load_symbol_mapping()
+                        st.rerun()
+                    else:
+                        st.error("Erreur lors de la sauvegarde")
+                else:
+                    st.error("Veuillez remplir tous les champs")
+        
+        with col_btn2:
+            if symbol_mapping and entreprise_nom in symbol_mapping:
+                if st.button("Supprimer le mapping", type="secondary"):
+                    if delete_symbol_mapping(entreprise_nom):
+                        st.success(f"Mapping supprimé pour {entreprise_nom}")
+                        st.session_state.symbol_mapping = load_symbol_mapping()
+                        st.rerun()
+                    else:
+                        st.error("Erreur lors de la suppression")
+    
+    with tab3:
+        st.header("Import depuis Sika Finance")
+        st.info("Importez automatiquement les données financières depuis Sika Finance")
+        
+        # Utiliser le mapping pour faciliter l'import
+        if 'symbol_mapping' in st.session_state and st.session_state.symbol_mapping:
+            st.subheader("Entreprises configurées")
+            
+            for entreprise_nom, symbole in st.session_state.symbol_mapping.items():
+                with st.expander(f"{entreprise_nom} → {symbole}"):
+                    col_s1, col_s2 = st.columns([3, 1])
+                    
+                    with col_s1:
+                        # Générer l'URL Sika Finance
+                        url_sika = get_sika_finance_url(entreprise_nom)
+                        st.text(f"URL Sika Finance: {url_sika}")
+                    
+                    with col_s2:
+                        if st.button(f"Importer", key=f"import_{entreprise_nom}"):
+                            with st.spinner(f"Importation depuis {url_sika}..."):
+                                data_sika = scrape_sika_finance(url_sika)
+                                
+                                if data_sika:
+                                    # Demander l'année
+                                    annee = st.number_input("Année des données", 
+                                                           min_value=2000, 
+                                                           max_value=2030, 
+                                                           value=2023,
+                                                           key=f"annee_{entreprise_nom}")
+                                    
+                                    # Calculer les ratios
+                                    ratios = calculate_enhanced_financial_ratios(
+                                        data_sika.get('bilan', {}),
+                                        data_sika.get('compte_resultat', {}),
+                                        data_sika.get('flux_tresorerie', {})
+                                    )
+                                    data_sika['ratios'] = ratios
+                                    
+                                    # Sauvegarder
+                                    if save_financial_data(symbole, annee, data_sika):
+                                        st.success(f"Données importées pour {symbole} - {annee}")
+                                        st.session_state.financial_data = load_all_financial_data()
+                                    else:
+                                        st.error("Erreur lors de la sauvegarde")
+                                else:
+                                    st.error("Impossible d'importer les données")
+        else:
+            st.warning("Aucun mapping configuré. Configurez d'abord des mappings dans l'onglet précédent.")
+            
+            # Option manuelle
+            st.subheader("Import manuel")
+            entreprise_nom = st.text_input("Nom de l'entreprise sur Sika Finance")
+            symbole_brvm = st.text_input("Symbole BRVM à utiliser")
+            
+            if entreprise_nom and symbole_brvm:
+                url_sika = get_sika_finance_url(entreprise_nom)
+                st.text(f"URL générée: {url_sika}")
+                
+                if st.button("Tester l'import"):
+                    with st.spinner(f"Test d'import depuis {url_sika}..."):
+                        data_sika = scrape_sika_finance(url_sika)
+                        
+                        if data_sika:
+                            st.success("Données récupérées avec succès!")
+                            
+                            # Afficher un aperçu
+                            with st.expander("Aperçu des données"):
+                                if data_sika.get('bilan'):
+                                    st.write("**Bilan:**")
+                                    st.json(data_sika['bilan'])
+                                
+                                if data_sika.get('compte_resultat'):
+                                    st.write("**Compte de résultat:**")
+                                    st.json(data_sika['compte_resultat'])
+    
+    with tab4:
+        st.header("Paramètres")
+        
+        st.subheader("Configuration Supabase")
+        st.info(f"URL: {SUPABASE_URL}")
+        
+        if st.button("Tester la connexion Supabase"):
+            supabase = init_supabase()
+            if supabase:
+                st.success("Connexion Supabase active")
+            else:
+                st.error("Erreur de connexion Supabase")
+        
+        st.subheader("Gestion du cache")
+        if st.button("Vider le cache", type="secondary"):
+            st.cache_data.clear()
+            st.success("Cache vidé")
+        
+        st.subheader("Déconnexion")
+        if st.button("Se déconnecter", type="secondary"):
+            st.session_state.dev_authenticated = False
+            st.rerun()
 
 # ===========================
 # INTERFACE PRINCIPALE
@@ -1026,7 +1199,7 @@ def main():
         developer_section()
     
     st.markdown("---")
-    st.caption(f"  {datetime.now().strftime('%d/%m/%Y %H:%M')} |   Source : BRVM")
+    st.caption(f"  {datetime.now().strftime('%d/%m/%Y %H:%M')} | Analyse BRVM Pro v1.0")
 
 if __name__ == "__main__":
     main()
