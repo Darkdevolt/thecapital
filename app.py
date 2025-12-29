@@ -384,6 +384,378 @@ def get_stats_secteurs(financial_data, mapping_secteurs):
     return df_stats.sort_values('Nombre d\'entreprises', ascending=False)
 
 # ===========================
+# PARTIE 1: FONCTIONS DE SCRAPING DES SECTEURS RICHBOURSE
+# À ajouter après vos imports existants
+# ===========================
+
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+
+# Configuration des secteurs Rich Bourse
+SECTEURS_RICHBOURSE = {
+    'Consommation discrétionnaire': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/consommation-discretionnaire',
+    'Consommation de base': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/consommation-de-base',
+    'Énergie': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/energie',
+    'Industriels': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/industriels',
+    'Services financiers': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/services-financiers',
+    'Services publics': 'https://www.richbourse.com/common/variation/index/veille/hausse_baisse/services-publics'
+}
+
+@st.cache_data(ttl=3600)  # Cache pour 1 heure
+def scrape_secteur_richbourse(url_secteur, nom_secteur):
+    """
+    Scrape les symboles et noms d'actions d'un secteur depuis Rich Bourse
+    
+    Args:
+        url_secteur: URL du secteur sur Rich Bourse
+        nom_secteur: Nom du secteur
+    
+    Returns:
+        Liste de dictionnaires contenant symbole, nom et secteur
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+        
+        response = requests.get(url_secteur, headers=headers, verify=False, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Trouver le tableau principal des actions
+        table = soup.find('table')
+        if not table:
+            return []
+        
+        actions = []
+        tbody = table.find('tbody')
+        
+        if tbody:
+            for row in tbody.find_all('tr'):
+                cols = row.find_all('td')
+                
+                # Vérifier qu'il y a au moins 3 colonnes (symbole, nom, variation, ...)
+                if len(cols) >= 3:
+                    symbole = cols[0].get_text(strip=True)
+                    nom_complet = cols[1].get_text(strip=True)
+                    
+                    # Ignorer les lignes vides ou de total
+                    if symbole and nom_complet and symbole != 'TOTAL':
+                        actions.append({
+                            'symbole': symbole,
+                            'nom': nom_complet,
+                            'secteur': nom_secteur
+                        })
+        
+        return actions
+    
+    except Exception as e:
+        st.error(f"Erreur scraping secteur {nom_secteur}: {str(e)}")
+        return []
+
+@st.cache_data(ttl=3600)
+def scrape_tous_secteurs_richbourse():
+    """
+    Scrape tous les secteurs Rich Bourse et retourne un dictionnaire
+    
+    Returns:
+        dict: {symbole: {'nom': nom_complet, 'secteur': secteur}}
+    """
+    mapping_secteurs = {}
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    total_secteurs = len(SECTEURS_RICHBOURSE)
+    
+    for idx, (nom_secteur, url) in enumerate(SECTEURS_RICHBOURSE.items()):
+        status_text.text(f"Scraping du secteur: {nom_secteur}...")
+        
+        actions = scrape_secteur_richbourse(url, nom_secteur)
+        
+        for action in actions:
+            mapping_secteurs[action['symbole']] = {
+                'nom': action['nom'],
+                'secteur': action['secteur']
+            }
+        
+        progress_bar.progress((idx + 1) / total_secteurs)
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    return mapping_secteurs
+
+def get_secteur_by_symbole(symbole, mapping_secteurs):
+    """
+    Retourne le secteur d'un symbole donné
+    
+    Args:
+        symbole: Symbole BRVM (ex: SNTS)
+        mapping_secteurs: Dictionnaire du mapping
+    
+    Returns:
+        str: Nom du secteur ou "Non classifié"
+    """
+    if symbole in mapping_secteurs:
+        return mapping_secteurs[symbole]['secteur']
+    return "Non classifié"
+
+def get_nom_by_symbole(symbole, mapping_secteurs):
+    """
+    Retourne le nom complet d'un symbole donné
+    
+    Args:
+        symbole: Symbole BRVM (ex: SNTS)
+        mapping_secteurs: Dictionnaire du mapping
+    
+    Returns:
+        str: Nom complet ou le symbole lui-même
+    """
+    if symbole in mapping_secteurs:
+        return mapping_secteurs[symbole]['nom']
+    return symbole
+
+# ===========================
+# PARTIE 3: INTERFACE DÉVELOPPEUR POUR LES SECTEURS
+# À remplacer dans votre fonction developer_section(), tab2
+# ===========================
+
+# Remplacez le contenu de "with tab2:" dans developer_section() par ceci:
+
+with tab2:
+    st.header("Noms et Secteurs des Entreprises")
+    
+    # Sous-onglets pour séparer scraping et gestion manuelle
+    subtab1, subtab2, subtab3 = st.tabs([
+        "🔄 Import Automatique (Rich Bourse)", 
+        "✏️ Gestion Manuelle",
+        "📊 Vue d'ensemble"
+    ])
+    
+    # ============= SOUS-ONGLET 1: IMPORT AUTOMATIQUE =============
+    with subtab1:
+        st.subheader("Import automatique depuis Rich Bourse")
+        
+        st.info("""
+        🎯 **Fonctionnalité automatique** : Récupère automatiquement les noms complets et les secteurs 
+        de toutes les entreprises BRVM depuis le site Rich Bourse.
+        
+        **Avantages** :
+        - ✅ Import en masse de tous les secteurs
+        - ✅ Données officielles et à jour
+        - ✅ Noms complets automatiques
+        - ✅ Classification sectorielle précise
+        """)
+        
+        col_scrape1, col_scrape2 = st.columns(2)
+        
+        with col_scrape1:
+            if st.button("🔄 Scanner Rich Bourse", type="primary", use_container_width=True):
+                with st.spinner("Scraping en cours..."):
+                    mapping_secteurs = scrape_tous_secteurs_richbourse()
+                    
+                    if mapping_secteurs:
+                        st.session_state['mapping_secteurs_temp'] = mapping_secteurs
+                        st.success(f"✅ {len(mapping_secteurs)} entreprises trouvées!")
+                        
+                        # Afficher un aperçu
+                        st.markdown("### 📋 Aperçu des données récupérées")
+                        df_preview = pd.DataFrame([
+                            {
+                                'Symbole': symbole,
+                                'Nom complet': info['nom'],
+                                'Secteur': info['secteur']
+                            }
+                            for symbole, info in list(mapping_secteurs.items())[:10]
+                        ])
+                        st.dataframe(df_preview, use_container_width=True)
+                        
+                        if len(mapping_secteurs) > 10:
+                            st.caption(f"... et {len(mapping_secteurs) - 10} autres entreprises")
+                    else:
+                        st.error("❌ Aucune donnée récupérée")
+        
+        with col_scrape2:
+            if 'mapping_secteurs_temp' in st.session_state:
+                if st.button("💾 Sauvegarder dans Supabase", type="secondary", use_container_width=True):
+                    mapping = st.session_state['mapping_secteurs_temp']
+                    
+                    with st.spinner("Sauvegarde en cours..."):
+                        success, errors = save_all_secteurs_to_supabase(mapping)
+                    
+                    if errors == 0:
+                        st.success(f"✅ Toutes les données sauvegardées ({success} entreprises)")
+                        # Recharger le mapping
+                        st.session_state.symbol_mapping = load_symbol_mapping()
+                        del st.session_state['mapping_secteurs_temp']
+                        st.rerun()
+                    else:
+                        st.warning(f"⚠️ {success} réussies, {errors} erreurs")
+        
+        # Statistiques par secteur
+        if 'mapping_secteurs_temp' in st.session_state:
+            st.markdown("---")
+            st.subheader("📊 Répartition par secteur")
+            
+            mapping = st.session_state['mapping_secteurs_temp']
+            secteurs_count = {}
+            
+            for info in mapping.values():
+                secteur = info['secteur']
+                secteurs_count[secteur] = secteurs_count.get(secteur, 0) + 1
+            
+            df_secteurs = pd.DataFrame([
+                {'Secteur': k, 'Nombre d\'entreprises': v}
+                for k, v in secteurs_count.items()
+            ]).sort_values('Nombre d\'entreprises', ascending=False)
+            
+            col_chart1, col_chart2 = st.columns([2, 1])
+            
+            with col_chart1:
+                st.bar_chart(df_secteurs.set_index('Secteur'))
+            
+            with col_chart2:
+                st.dataframe(df_secteurs, use_container_width=True, hide_index=True)
+    
+    # ============= SOUS-ONGLET 2: GESTION MANUELLE =============
+    with subtab2:
+        st.subheader("Gestion manuelle des noms et secteurs")
+        
+        # Charger le mapping existant
+        symbol_mapping = load_secteurs_from_supabase()
+        st.session_state.symbol_mapping = symbol_mapping
+        
+        # Afficher les mappings existants
+        if symbol_mapping:
+            st.markdown("### 📋 Mappings configurés")
+            df_mapping = pd.DataFrame([
+                {
+                    'Symbole': symbole,
+                    'Nom complet': info['nom'],
+                    'Secteur': info['secteur']
+                }
+                for symbole, info in symbol_mapping.items()
+            ])
+            st.dataframe(df_mapping, use_container_width=True, hide_index=True)
+            
+            # Bouton de téléchargement
+            csv_mapping = df_mapping.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                label="📥 Télécharger en CSV",
+                data=csv_mapping,
+                file_name=f"brvm_mapping_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("📭 Aucun mapping configuré. Utilisez l'import automatique ou ajoutez manuellement.")
+        
+        st.markdown("---")
+        st.markdown("### ➕ Ajouter/Modifier manuellement")
+        
+        # Charger les symboles existants dans les données financières
+        financial_data = init_storage()
+        symboles_existants = sorted(set([
+            data['symbole'] for data in financial_data.values() 
+            if isinstance(data, dict)
+        ]))
+        
+        col_manual1, col_manual2, col_manual3 = st.columns(3)
+        
+        with col_manual1:
+            if symboles_existants:
+                symbole = st.selectbox("Symbole BRVM", [''] + symboles_existants, key="manual_symbole")
+            else:
+                symbole = st.text_input("Symbole BRVM", placeholder="Ex: SNTS", key="manual_symbole_text")
+        
+        with col_manual2:
+            nom_complet = st.text_input("Nom complet", placeholder="Ex: Sonatel Sénégal")
+        
+        with col_manual3:
+            secteur = st.selectbox(
+                "Secteur",
+                [''] + list(SECTEURS_RICHBOURSE.keys()) + ['Autre']
+            )
+            
+            if secteur == 'Autre':
+                secteur = st.text_input("Précisez le secteur")
+        
+        col_btn_manual1, col_btn_manual2 = st.columns(2)
+        
+        with col_btn_manual1:
+            if st.button("💾 Sauvegarder", type="primary", use_container_width=True, key="save_manual"):
+                if symbole and nom_complet and secteur:
+                    if save_secteur_mapping(symbole, nom_complet, secteur):
+                        st.success(f"✅ Sauvegardé: {symbole} → {nom_complet} ({secteur})")
+                        st.session_state.symbol_mapping = load_secteurs_from_supabase()
+                        st.rerun()
+                    else:
+                        st.error("❌ Erreur lors de la sauvegarde")
+                else:
+                    st.error("⚠️ Veuillez remplir tous les champs")
+        
+        with col_btn_manual2:
+            if symbol_mapping and symbole in symbol_mapping:
+                if st.button("🗑️ Supprimer", type="secondary", use_container_width=True, key="delete_manual"):
+                    if delete_symbol_mapping(symbole):
+                        st.success(f"✅ Supprimé: {symbole}")
+                        st.session_state.symbol_mapping = load_secteurs_from_supabase()
+                        st.rerun()
+                    else:
+                        st.error("❌ Erreur lors de la suppression")
+    
+    # ============= SOUS-ONGLET 3: VUE D'ENSEMBLE =============
+    with subtab3:
+        st.subheader("📊 Vue d'ensemble et statistiques")
+        
+        symbol_mapping = load_secteurs_from_supabase()
+        financial_data = init_storage()
+        
+        if symbol_mapping:
+            # Statistiques globales
+            col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+            
+            secteurs_uniques = set([info['secteur'] for info in symbol_mapping.values()])
+            
+            with col_stat1:
+                st.metric("Total entreprises", len(symbol_mapping))
+            
+            with col_stat2:
+                st.metric("Secteurs", len(secteurs_uniques))
+            
+            with col_stat3:
+                # Compter combien ont des données financières
+                avec_donnees = sum(1 for s in symbol_mapping.keys() 
+                                  if any(d.get('symbole') == s for d in financial_data.values()))
+                st.metric("Avec données financières", avec_donnees)
+            
+            with col_stat4:
+                sans_secteur = sum(1 for info in symbol_mapping.values() 
+                                  if info['secteur'] == 'Non classifié')
+                st.metric("Sans secteur", sans_secteur)
+            
+            st.markdown("---")
+            
+            # Stats détaillées par secteur
+            df_stats = get_stats_secteurs(financial_data, symbol_mapping)
+            
+            col_overview1, col_overview2 = st.columns([3, 2])
+            
+            with col_overview1:
+                st.markdown("### 📊 Répartition sectorielle")
+                st.dataframe(df_stats, use_container_width=True, hide_index=True)
+            
+            with col_overview2:
+                st.markdown("### 📈 Graphique")
+                if not df_stats.empty:
+                    st.bar_chart(df_stats.set_index('Secteur')['Nombre d\'entreprises'])
+        else:
+            st.warning("📭 Aucune donnée disponible. Commencez par l'import automatique.")
+
+# ===========================
 # NAVIGATION STYLÉE
 # ===========================
 def render_navigation():
