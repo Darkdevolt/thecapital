@@ -1,5 +1,11 @@
 streamlit
+pandas
 requests
 beautifulsoup4
-pandas
+supabase
+scikit-learn
+numpy
+plotly
+urllib3
+python-dotenv
 lxml
