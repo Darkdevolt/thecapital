@@ -491,11 +491,6 @@ def calculate_financial_projections(symbole, financial_data, annees_projection=3
 # Désactiver les warnings SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="BRVM Cours Actions", page_icon="📈", layout="wide")
-
-st.title("📈 Cours des Actions BRVM")
-st.markdown("*Bourse Régionale des Valeurs Mobilières via Sikafinance*")
-
 @st.cache_data(ttl=300)
 def scrape_brvm():
     """Scrape les données de cours des actions depuis Sikafinance"""
