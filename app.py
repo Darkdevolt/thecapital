@@ -759,19 +759,26 @@ def page_secteurs():
             if symbole_selected:
                 st.subheader(f"Données pour {symbole_selected}")
                 
-                # Afficher les années disponibles
-                annees_data = entreprises_data[symbole_selected]
-                for data in annees_data:
-                    annee = data.get('annee')
-                    avec st.expander(f"Année {annee}"):
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if data.get('bilan'):
-                                st.markdown("**Bilan**")
-                                for k, v in data['bilan'].items():
-                                    if isinstance(v, (int, float)):
-                                        st.text(f"{k}: {v:,.0f}")
+                        # Afficher les années disponibles
+                        annees_data = entreprises_data[symbole_selected]
+                        for data in annees_data:
+                            annee = data.get('annee')
+                            with st.expander(f"Année {annee}"):  # <--- CORRIGÉ : "with" au lieu de "avec"
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    if data.get('bilan'):
+                                        st.markdown("**Bilan**")
+                                        for k, v in data['bilan'].items():
+                                            if isinstance(v, (int, float)):
+                                                st.text(f"{k}: {v:,.0f}")
+                                
+                                with col2:
+                                    if data.get('compte_resultat'):
+                                        st.markdown("**Compte de résultat**")
+                                        for k, v in data['compte_resultat'].items():
+                                            if isinstance(v, (int, float)):
+                                                st.text(f"{k}: {v:,.0f}")
                         
                         with col2:
                             if data.get('compte_resultat'):
