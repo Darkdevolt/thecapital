@@ -29,7 +29,7 @@ st.set_page_config(page_title="Analyse BRVM", layout="wide")
 DEVELOPER_PASSWORD = "dev_brvm_2024"
 
 # Configuration Supabase
-SUPABASE_URL = "https://otsiwiwnowxeolbbgvm.supabase.co"
+SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
 SUPABASE_KEY = "sb_publishable_Mhal5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
 
 # ======================
