@@ -32,7 +32,7 @@ DEVELOPER_PASSWORD = st.secrets.get("DEV_PASSWORD", "dev_brvm_2024")
 
 # Configuration Supabase (À DÉPLACER DANS SECRETS STREAMLIT)
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://otsiwiwlnowxeolbbgvm.supabase.co")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "votre_clé_ici")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ")
 
 # ======================
 # STYLES CSS PROFESSIONNELS
