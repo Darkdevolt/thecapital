@@ -190,12 +190,32 @@ def load_custom_css():
 def init_supabase():
     """Initialiser la connexion à Supabase avec gestion d'erreurs"""
     try:
+        # Vérifier que les credentials existent
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            st.warning("⚠️ Configuration Supabase manquante")
+            return None
+        
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        # Test de connexion silencieux
-        test_response = supabase.table("financial_data").select("*", count="exact").limit(1).execute()
+        
+        # Test de connexion simplifié
+        try:
+            response = supabase.table("financial_data").select("*").limit(1).execute()
+            print(f"✅ Connexion Supabase réussie: {len(response.data)} enregistrement(s)")
+        except Exception as e:
+            st.warning(f"⚠️ Table 'financial_data' peut-être inexistante: {str(e)}")
+            # Continuer quand même, la table peut être créée plus tard
+        
         return supabase
+        
     except Exception as e:
-        st.error(f"⚠️ Erreur de connexion base de données: {str(e)}")
+        st.error(f"❌ Erreur de connexion Supabase: {str(e)}")
+        st.info("""
+        **Dépannage:**
+        1. Vérifiez que SUPABASE_URL et SUPABASE_KEY sont corrects
+        2. Vérifiez votre connexion internet
+        3. Vérifiez que le projet Supabase est actif
+        4. URL doit ressembler à: https://xxx.supabase.co
+        """)
         return None
 
 def init_storage():
