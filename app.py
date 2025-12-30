@@ -30,7 +30,7 @@ DEVELOPER_PASSWORD = "dev_brvm_2024"
 
 # Configuration Supabase
 SUPABASE_URL = "https://otsiwiwlnowxeolbbgvm.supabase.co"
-SUPABASE_KEY = "sb_publishable_Mhal5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
+SUPABASE_KEY = "sb_publishable_MhaI5b-kMmb5liIMOJ4P3Q_xGTsJAFJ"
 
 # ======================
 # INITIALISATION SUPABASE
