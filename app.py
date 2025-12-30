@@ -12,6 +12,9 @@ from supabase import create_client
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import urllib3
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # Désactiver les warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
