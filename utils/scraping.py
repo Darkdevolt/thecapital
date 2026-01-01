@@ -1,26 +1,19 @@
-"""
-Module de scraping des données BRVM depuis Sikafinance
-"""
+# utils/scraping.py
 import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import urllib3
-from typing import Tuple, Optional
-from config import app_config
+from datetime import datetime
 
-# Désactiver les warnings SSL
+# Désactiver les warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-
-@st.cache_data(ttl=app_config.CACHE_TTL)
-def scrape_brvm() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
-    """
-    Scraper les données de cours des actions depuis Sikafinance
+@st.cache_data(ttl=300)
+def scrape_brvm():
+    """Scrape les données de cours des actions depuis Sikafinance"""
+    url = "https://www.sikafinance.com/marches/aaz"
     
-    Returns:
-        Tuple (df_indices, df_actions) ou (None, None) si erreur
-    """
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -29,12 +22,7 @@ def scrape_brvm() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         }
         
         # Requête avec vérification SSL désactivée
-        response = requests.get(
-            app_config.SCRAPING_URL,
-            headers=headers,
-            verify=False,
-            timeout=app_config.SCRAPING_TIMEOUT
-        )
+        response = requests.get(url, headers=headers, verify=False, timeout=15)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -46,104 +34,69 @@ def scrape_brvm() -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
             return None, None
         
         # Première table : Les indices
-        df_indices = _parse_table(tables[0])
+        indices_table = tables[0]
+        indices_data = []
+        indices_headers = []
         
-        # Deuxième table : Les actions
-        df_actions = _parse_table(tables[1])
-        
-        return df_indices, df_actions
-    
-    except requests.exceptions.Timeout:
-        st.error(f"⏱️ Timeout lors du scraping (>{app_config.SCRAPING_TIMEOUT}s)")
-        return None, None
-    
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ Erreur réseau lors du scraping: {str(e)}")
-        return None, None
-    
-    except Exception as e:
-        st.error(f"❌ Erreur lors du scraping: {str(e)}")
-        return None, None
-
-
-def _parse_table(table) -> Optional[pd.DataFrame]:
-    """
-    Parser une table HTML en DataFrame
-    
-    Args:
-        table: Objet BeautifulSoup table
-        
-    Returns:
-        DataFrame ou None
-    """
-    try:
-        headers = []
-        data = []
-        
-        # Extraire les en-têtes
-        thead = table.find('thead')
+        # Extraire les en-têtes des indices
+        thead = indices_table.find('thead')
         if thead:
             for th in thead.find_all('th'):
-                headers.append(th.get_text(strip=True))
+                indices_headers.append(th.get_text(strip=True))
         else:
             # Si pas de thead, prendre la première ligne comme en-tête
-            first_row = table.find('tr')
+            first_row = indices_table.find('tr')
             if first_row:
                 for th in first_row.find_all(['th', 'td']):
-                    headers.append(th.get_text(strip=True))
+                    indices_headers.append(th.get_text(strip=True))
         
-        # Extraire les données
-        tbody = table.find('tbody')
+        # Extraire les données des indices
+        tbody = indices_table.find('tbody')
         if tbody:
             for row in tbody.find_all('tr'):
                 cols = row.find_all('td')
                 if cols and len(cols) > 0:
                     row_data = [col.get_text(strip=True) for col in cols]
-                    data.append(row_data)
+                    indices_data.append(row_data)
         
-        # Créer le DataFrame
-        if headers and data:
-            return pd.DataFrame(data, columns=headers)
+        # Deuxième table : Les actions
+        actions_table = tables[1]
+        actions_data = []
+        actions_headers = []
         
-        return None
+        # Extraire les en-têtes des actions
+        thead = actions_table.find('thead')
+        if thead:
+            for th in thead.find_all('th'):
+                actions_headers.append(th.get_text(strip=True))
+        else:
+            # Si pas de thead, prendre la première ligne comme en-tête
+            first_row = actions_table.find('tr')
+            if first_row:
+                for th in first_row.find_all(['th', 'td']):
+                    actions_headers.append(th.get_text(strip=True))
         
-    except Exception as e:
-        st.error(f"❌ Erreur de parsing de table: {str(e)}")
-        return None
-
-
-def format_brvm_dataframe(df: pd.DataFrame, df_type: str = "actions") -> pd.DataFrame:
-    """
-    Formater un DataFrame BRVM pour un meilleur affichage
+        # Extraire les données des actions
+        tbody = actions_table.find('tbody')
+        if tbody:
+            for row in tbody.find_all('tr'):
+                cols = row.find_all('td')
+                if cols and len(cols) > 0:
+                    row_data = [col.get_text(strip=True) for col in cols]
+                    actions_data.append(row_data)
+        
+        # Créer les DataFrames
+        df_indices = None
+        df_actions = None
+        
+        if indices_headers and indices_data:
+            df_indices = pd.DataFrame(indices_data, columns=indices_headers)
+        
+        if actions_headers and actions_data:
+            df_actions = pd.DataFrame(actions_data, columns=actions_headers)
+        
+        return df_indices, df_actions
     
-    Args:
-        df: DataFrame à formater
-        df_type: Type de données ("actions" ou "indices")
-        
-    Returns:
-        DataFrame formaté
-    """
-    if df is None or df.empty:
-        return df
-    
-    try:
-        # Conversion des colonnes numériques si possible
-        for col in df.columns:
-            # Essayer de convertir en numérique (gère les séparateurs de milliers)
-            try:
-                df[col] = pd.to_numeric(
-                    df[col].str.replace(' ', '').str.replace(',', '.'),
-                    errors='ignore'
-                )
-            except:
-                pass
-        
-        return df
-        
     except Exception as e:
-        st.warning(f"⚠️ Impossible de formater le DataFrame: {str(e)}")
-        return df
-
-
-# Export
-__all__ = ['scrape_brvm', 'format_brvm_dataframe']
+        st.error(f"Erreur lors du scraping: {str(e)}")
+        return None, None
