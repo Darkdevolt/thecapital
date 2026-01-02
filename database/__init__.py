@@ -1,14 +1,12 @@
 """
 Module de gestion de la base de données Supabase
-
 Ce module gère :
 - La connexion à Supabase
 - Les opérations CRUD sur les données financières
 - Les opérations CRUD sur les mappings symboles
 - Le stockage en session_state
 """
-
-from .supabase_client import SupabaseClient, init_supabase
+from .supabase_client import init_supabase
 from .operations import (
     load_all_financial_data,
     save_financial_data,
@@ -23,7 +21,6 @@ from .operations import (
 
 __all__ = [
     # Client
-    'SupabaseClient',
     'init_supabase',
     
     # Données financières
